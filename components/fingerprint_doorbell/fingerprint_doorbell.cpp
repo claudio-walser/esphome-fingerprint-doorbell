@@ -519,6 +519,7 @@ void FingerprintDoorbell::load_fingerprint_names() {
   ESP_LOGI(TAG, "Loading fingerprint names from preferences");
   
   for (uint16_t i = 1; i <= 200; i++) {
+    yield();  // Feed watchdog during long loop
     std::string key = "fp_" + std::to_string(i);
     ESPPreferenceObject pref = global_preferences->make_preference<std::array<char, 32>>(fnv1_hash(key.c_str()));
     
