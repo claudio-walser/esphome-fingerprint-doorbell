@@ -1,0 +1,125 @@
+# Fingerprint Doorbell ESPHome Package
+# Version 1.0
+
+# External components
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [ fingerprint_doorbell ]
+
+# Required library for fingerprint sensor
+esphome:
+  libraries:
+    - "adafruit/Adafruit Fingerprint Sensor Library@^2.1.0"
+
+# Core UART configuration for fingerprint sensor
+uart:
+  id: uart_fingerprint
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 57600
+
+# Main fingerprint doorbell component
+fingerprint_doorbell:
+  id: fp_doorbell
+  uart_id: uart_fingerprint
+  touch_pin: GPIO5
+  doorbell_pin: GPIO19
+  ignore_touch_ring: false
+
+# Sensors
+sensor:
+  - platform: fingerprint_doorbell
+    fingerprint_doorbell_id: fp_doorbell
+    match_id:
+      name: "Fingerprint Match ID"
+      id: fp_match_id
+    confidence:
+      name: "Fingerprint Confidence"
+      id: fp_confidence
+
+text_sensor:
+  - platform: fingerprint_doorbell
+    fingerprint_doorbell_id: fp_doorbell
+    match_name:
+      name: "Fingerprint Match Name"
+      id: fp_match_name
+
+binary_sensor:
+  - platform: fingerprint_doorbell
+    fingerprint_doorbell_id: fp_doorbell
+    ring:
+      name: "Doorbell Ring"
+      id: fp_ring
+    finger:
+      name: "Finger Detected"
+      id: fp_finger
+
+# Home Assistant Services for enrollment and management
+api:
+  services:
+    - service: enroll_fingerprint
+      variables:
+        finger_id: int
+        finger_name: string
+      then:
+        - logger.log:
+            format: "Enrolling fingerprint ID %d with name %s"
+            args: [ 'finger_id', 'finger_name.c_str()' ]
+        - lambda: |-
+            id(fp_doorbell).enroll_fingerprint(finger_id, finger_name);
+    
+    - service: delete_fingerprint
+      variables:
+        finger_id: int
+      then:
+        - logger.log:
+            format: "Deleting fingerprint ID %d"
+            args: [ 'finger_id' ]
+        - lambda: |-
+            id(fp_doorbell).delete_fingerprint(finger_id);
+    
+    - service: delete_all_fingerprints
+      then:
+        - logger.log: "Deleting all fingerprints"
+        - lambda: |-
+            id(fp_doorbell).delete_all_fingerprints();
+    
+    - service: rename_fingerprint
+      variables:
+        finger_id: int
+        new_name: string
+      then:
+        - logger.log:
+            format: "Renaming fingerprint ID %d to %s"
+            args: [ 'finger_id', 'new_name.c_str()' ]
+        - lambda: |-
+            id(fp_doorbell).rename_fingerprint(finger_id, new_name);
+    
+    - service: set_ignore_touch_ring
+      variables:
+        state: bool
+      then:
+        - logger.log:
+            format: "Setting ignore touch ring to %d"
+            args: [ 'state' ]
+        - lambda: |-
+            id(fp_doorbell).set_ignore_touch_ring_state(state);
+
+# Status LED (optional - uses onboard LED)
+status_led:
+  pin:
+    number: GPIO2
+    inverted: true
+
+# Logging
+logger:
+  level: DEBUG
+  logs:
+    fingerprint_doorbell: DEBUG
+
+# Time component for timestamps (uses Home Assistant time)
+time:
+  - platform: homeassistant
+    id: homeassistant_time

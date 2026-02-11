@@ -1,0 +1,57 @@
+# Example ESPHome Configuration for Fingerprint Doorbell
+# This is what the user puts in their ESPHome dashboard
+
+substitutions:
+  name: fingerprint-doorbell
+  friendly_name: "Front Door Fingerprint"
+
+# Include the fingerprint doorbell package
+packages:
+  fingerprint_doorbell: !include fingerprint-doorbell.yaml
+  # Or from GitHub (once you publish it):
+  # fingerprint_doorbell: github://YOUR_USERNAME/fingerprint-doorbell-esphome/fingerprint-doorbell.yaml@main
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  platform: ESP32
+  board: esp32doit-devkit-v1
+
+# WiFi configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: "12345678"
+
+captive_portal:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+# Enable OTA updates
+ota:
+  password: !secret ota_password
+
+# Optional: Web server for diagnostics
+web_server:
+  port: 80
+
+# Optional: Override default pins if needed
+# fingerprint_doorbell:
+#   touch_pin: GPIO5      # Default
+#   doorbell_pin: GPIO19  # Default
+#   ignore_touch_ring: false  # Set to true if sensor is exposed to rain
+
+# Optional: Customize sensor names
+# sensor:
+#   - platform: fingerprint_doorbell
+#     match_id:
+#       name: "Front Door Match ID"
+#     confidence:
+#       name: "Front Door Confidence"

@@ -1,0 +1,126 @@
+# Example Home Assistant Automations for Fingerprint Doorbell
+
+# Automation 1: Turn on light when specific person is detected
+automation:
+  - alias: "Front Door - John Unlocked"
+    trigger:
+      - platform: state
+        entity_id: text_sensor.front_door_fingerprint_match_name
+        to: "John"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.front_door_fingerprint_confidence
+        above: 100
+    action:
+      - service: light.turn_on
+        target:
+          entity_id: light.hallway
+      - service: notify.mobile_app
+        data:
+          message: "John unlocked the front door"
+
+# Automation 2: Send notification when doorbell is rung
+  - alias: "Front Door - Doorbell Ring"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.front_door_doorbell_ring
+        to: "on"
+    action:
+      - service: notify.mobile_app
+        data:
+          message: "Someone is at the front door"
+          title: "Doorbell"
+      - service: camera.snapshot
+        target:
+          entity_id: camera.front_door
+        data:
+          filename: "/config/www/doorbell_snapshot.jpg"
+
+# Automation 3: Unlock door for known fingerprints
+  - alias: "Front Door - Auto Unlock"
+    trigger:
+      - platform: state
+        entity_id: sensor.front_door_fingerprint_match_id
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.front_door_fingerprint_match_id
+        above: 0
+      - condition: numeric_state
+        entity_id: sensor.front_door_fingerprint_confidence
+        above: 150
+    action:
+      - service: lock.unlock
+        target:
+          entity_id: lock.front_door
+      - service: notify.mobile_app
+        data:
+          message: "Door unlocked for {{ states('text_sensor.front_door_fingerprint_match_name') }}"
+
+# Automation 4: Enable rain protection mode
+  - alias: "Front Door - Rain Protection"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.rain_sensor
+    action:
+      - service: esphome.front_door_fingerprint_set_ignore_touch_ring
+        data:
+          state: "{{ is_state('binary_sensor.rain_sensor', 'on') }}"
+
+# Script: Enroll new fingerprint
+script:
+  enroll_fingerprint:
+    alias: "Enroll New Fingerprint"
+    fields:
+      finger_id:
+        description: "Fingerprint ID (1-200)"
+        example: 1
+      finger_name:
+        description: "Name for this fingerprint"
+        example: "John"
+    sequence:
+      - service: esphome.front_door_fingerprint_enroll_fingerprint
+        data:
+          finger_id: "{{ finger_id }}"
+          finger_name: "{{ finger_name }}"
+      - service: notify.mobile_app
+        data:
+          message: "Enrolling fingerprint {{ finger_id }} for {{ finger_name }}. Please place your finger on the sensor 5 times."
+
+# Script: Delete fingerprint
+  delete_fingerprint:
+    alias: "Delete Fingerprint"
+    fields:
+      finger_id:
+        description: "Fingerprint ID to delete (1-200)"
+        example: 1
+    sequence:
+      - service: esphome.front_door_fingerprint_delete_fingerprint
+        data:
+          finger_id: "{{ finger_id }}"
+      - service: notify.mobile_app
+        data:
+          message: "Deleted fingerprint ID {{ finger_id }}"
+
+# Lovelace Dashboard Card Example
+# Add this to your Lovelace dashboard for easy management
+
+# type: entities
+# title: Front Door Fingerprint
+# entities:
+#   - entity: text_sensor.front_door_fingerprint_match_name
+#     name: Last Match
+#   - entity: sensor.front_door_fingerprint_match_id
+#     name: Match ID
+#   - entity: sensor.front_door_fingerprint_confidence
+#     name: Confidence
+#   - entity: binary_sensor.front_door_doorbell_ring
+#     name: Doorbell
+#   - entity: binary_sensor.front_door_finger_detected
+#     name: Finger Detected
+# footer:
+#   type: buttons
+#   entities:
+#     - entity: script.enroll_fingerprint
+#       name: Enroll
+#     - entity: script.delete_fingerprint
+#       name: Delete
