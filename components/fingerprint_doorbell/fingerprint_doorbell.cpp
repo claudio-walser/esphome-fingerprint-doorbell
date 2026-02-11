@@ -22,20 +22,56 @@ void FingerprintDoorbell::setup() {
     this->doorbell_pin_->digital_write(false);
   }
 
-  // Initialize hardware serial for fingerprint sensor
-  // Error 0x01 (FINGERPRINT_PACKETRECIEVEERR) often means TX/RX are swapped
-  // Let's try swapped pins: RX=17, TX=16 instead of the default RX=16, TX=17
-  this->hw_serial_ = &Serial2;
-  this->hw_serial_->begin(57600, SERIAL_8N1, 17, 16);  // SWAPPED: RX=17, TX=16
-  delay(50);  // Give sensor time to initialize
+  // AUTO-SCAN MODE: Try to find correct TX/RX pins automatically
+  ESP_LOGI(TAG, "Starting automatic pin detection for R503 sensor...");
   
-  ESP_LOGI(TAG, "Serial2 initialized with SWAPPED pins: RX=GPIO17, TX=GPIO16");
+  // Common ESP32 pin combinations for UART
+  const int rx_candidates[] = {16, 17, 25, 26, 32, 33};
+  const int tx_candidates[] = {16, 17, 25, 26, 32, 33};
   
-  this->finger_ = new Adafruit_Fingerprint(this->hw_serial_);
+  bool found = false;
   
-  // Don't connect in setup() - do it in loop() to avoid blocking watchdog
+  for (int rx : rx_candidates) {
+    for (int tx : tx_candidates) {
+      if (rx == tx) continue;  // Can't use same pin for RX and TX
+      
+      ESP_LOGD(TAG, "Testing RX=GPIO%d, TX=GPIO%d...", rx, tx);
+      
+      // Try this pin combination
+      Serial2.begin(57600, SERIAL_8N1, rx, tx);
+      delay(100);  // Give time to initialize
+      
+      // Create temporary Adafruit_Fingerprint object
+      Adafruit_Fingerprint test_finger(&Serial2);
+      
+      // Try to verify password
+      uint8_t result = test_finger.verifyPassword();
+      
+      if (result == FINGERPRINT_OK) {
+        ESP_LOGI(TAG, "✓ SUCCESS! Found working pins: RX=GPIO%d, TX=GPIO%d", rx, tx);
+        this->hw_serial_ = &Serial2;
+        this->finger_ = new Adafruit_Fingerprint(this->hw_serial_);
+        found = true;
+        break;
+      } else {
+        ESP_LOGV(TAG, "  Failed with error 0x%02X", result);
+        Serial2.end();  // Clean up for next attempt
+        delay(50);
+      }
+    }
+    if (found) break;
+  }
+  
+  if (!found) {
+    ESP_LOGE(TAG, "✗ Could not find working pin combination!");
+    ESP_LOGE(TAG, "Please check: 1) Sensor power 2) Wiring 3) Sensor functionality");
+    // Initialize anyway with default pins for manual troubleshooting
+    Serial2.begin(57600, SERIAL_8N1, 16, 17);
+    this->hw_serial_ = &Serial2;
+    this->finger_ = new Adafruit_Fingerprint(this->hw_serial_);
+  }
+  
   this->sensor_connected_ = false;
-  
   ESP_LOGI(TAG, "Fingerprint sensor will connect in first loop iteration");
 }
 
