@@ -117,8 +117,8 @@ void FingerprintDoorbell::loop() {
 
 void FingerprintDoorbell::dump_config() {
   ESP_LOGCONFIG(TAG, "Fingerprint Doorbell:");
-  ESP_LOGCONFIG(TAG, "  Touch Pin: GPIO%d", this->touch_pin_->get_pin());
-  ESP_LOGCONFIG(TAG, "  Doorbell Pin: GPIO%d", this->doorbell_pin_->get_pin());
+  LOG_PIN("  Touch Pin: ", this->touch_pin_);
+  LOG_PIN("  Doorbell Pin: ", this->doorbell_pin_);
   ESP_LOGCONFIG(TAG, "  Ignore Touch Ring: %s", YESNO(this->ignore_touch_ring_));
   ESP_LOGCONFIG(TAG, "  Sensor Connected: %s", YESNO(this->sensor_connected_));
   

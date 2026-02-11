@@ -2,15 +2,109 @@
 
 ## Choose Your Testing Method
 
-### ✅ Option 1: Local Testing (RECOMMENDED FIRST)
-Test without GitHub - faster iteration, easier debugging
+### ✅ Option 1: GitHub Testing (RECOMMENDED for containers)
+Test directly from GitHub - perfect for ESPHome in Docker/Podman containers
 
-### Option 2: GitHub Testing
-For final validation before sharing with others
+### Option 2: Local Testing
+For development or when you have local ESPHome installation
 
 ---
 
-## Option 1: Local Testing (Start Here!)
+## Option 1: GitHub Testing (Start Here!)
+
+### Step 1: Create ESPHome Configuration
+
+In your ESPHome dashboard, create a new device configuration file:
+
+```yaml
+substitutions:
+  name: fingerprint-doorbell
+  friendly_name: "Front Door Fingerprint"
+
+# GitHub package reference
+packages:
+  fingerprint_doorbell: github://claudio-walser/esphome-fingerprint-doorbell/fingerprint-doorbell.yaml@main
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  platformio_options:
+    platform: espressif32@6.4.0
+
+esp32:
+  board: esp32doit-devkit-v1
+  framework:
+    type: arduino
+
+# WiFi configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  
+  # Fallback hotspot if WiFi fails
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: "12345678"
+
+captive_portal:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+# Enable OTA updates
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# Optional: Web server for diagnostics
+web_server:
+  port: 80
+```
+
+### Step 2: Configure Secrets
+
+Edit your `secrets.yaml` file:
+```yaml
+wifi_ssid: "YourWiFiSSID"
+wifi_password: "YourWiFiPassword"
+api_encryption_key: "generate_via_esphome_dashboard"
+ota_password: "your_ota_password"
+```
+
+### Step 3: Validate Configuration
+
+1. Click **"Validate"** in ESPHome dashboard
+2. ESPHome will download the package from GitHub automatically
+3. Check for compilation errors
+
+### Step 4: First Flash (USB Required)
+
+1. Connect ESP32 via USB to your server/machine
+2. Click **"Install"** → **"Plug into this computer"**
+3. Wait for compilation (~5-10 minutes first time)
+4. After success, future updates are wireless!
+
+### Step 5: Verify in Home Assistant
+
+1. Settings → Devices & Services
+2. ESPHome should auto-discover the device
+3. Configure with API encryption key
+4. Verify 5 entities appear:
+   - sensor.fingerprint_match_id
+   - sensor.fingerprint_confidence
+   - text_sensor.fingerprint_match_name
+   - binary_sensor.doorbell_ring
+   - binary_sensor.finger_detected
+
+### Step 6: Test & Enroll
+
+See testing steps in "Common Testing Steps" section below.
+
+---
+
+## Option 2: Local Testing
 
 ### Step 1: Install to ESPHome Directory
 
@@ -159,60 +253,35 @@ In Home Assistant:
 
 ---
 
-## Option 2: GitHub Testing
+---
 
-Once local testing works, publish to GitHub for easy sharing.
+## Common Testing Steps
 
-### Step 1: Create GitHub Repository
+### Enroll First Fingerprint
 
-```bash
-cd esphome-package
+In Home Assistant:
+1. Developer Tools → Services
+2. Select `esphome.fingerprint_doorbell_enroll_fingerprint`
+3. Enter:
+   ```yaml
+   finger_id: 1
+   finger_name: "Test User"
+   ```
+4. Watch LED flash purple
+5. Place finger 5 times when prompted
 
-# Initialize git (if not already)
-git init
+### Test Recognition
 
-# Add all files
-git add .
+1. Place enrolled finger on sensor
+2. Verify entities update:
+   - match_id = 1
+   - match_name = "Test User"
+   - confidence > 100
 
-# Commit
-git commit -m "Initial commit - Fingerprint Doorbell ESPHome package"
+### Test Doorbell
 
-# Create repo on GitHub (via web or gh CLI)
-# Then push:
-git remote add origin https://github.com/YOUR_USERNAME/fingerprint-doorbell-esphome.git
-git branch -M main
-git push -u origin main
-```
-
-### Step 2: Test GitHub Package
-
-Create a **new** test configuration:
-
-```yaml
-substitutions:
-  name: fingerprint-doorbell-github-test
-  friendly_name: "GitHub Test"
-
-# GitHub package reference
-packages:
-  fingerprint_doorbell: github://YOUR_USERNAME/fingerprint-doorbell-esphome/fingerprint-doorbell.yaml@main
-
-esphome:
-  name: ${name}
-  platform: ESP32
-  board: esp32doit-devkit-v1
-
-wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-
-api:
-ota:
-```
-
-### Step 3: Validate and Flash
-
-ESPHome will automatically download from GitHub on first compile!
+1. Place unknown finger
+2. Verify `doorbell_ring` triggers for 1 second
 
 ---
 
@@ -222,16 +291,17 @@ ESPHome will automatically download from GitHub on first compile!
 
 **Solution:** Check the `external_components` path in `fingerprint-doorbell.yaml`
 
-For local testing, it should be:
+For GitHub package:
 ```yaml
 external_components:
   - source:
-      type: local
-      path: components
+      type: git
+      url: https://github.com/claudio-walser/esphome-fingerprint-doorbell
+      ref: main
     components: [ fingerprint_doorbell ]
 ```
 
-For GitHub testing:
+For local development:
 ```yaml
 external_components:
   - source:

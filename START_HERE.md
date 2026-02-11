@@ -1,62 +1,66 @@
 # 🎯 YOUR NEXT STEPS - Simple Guide
 
-Hi! Here's exactly what to do next to test your ESPHome package.
+Hi! Here's exactly what to do next to test your ESPHome package from GitHub.
 
-## ⚡ Quick Testing (Recommended)
+## ⚡ Quick Testing (For ESPHome in Container)
 
-### Step 1: Copy Files to ESPHome
+### Step 1: Create New Device in ESPHome Dashboard
 
-You need to copy the package files to your ESPHome directory.
+1. Open your ESPHome dashboard (in your Podman container)
+2. Click **"+ New Device"**
+3. Give it a name: `fingerprint-doorbell`
+4. Skip the wizard, click **"Skip"**
+5. Choose **"Edit"** on the new device
 
-**Where is your ESPHome?**
-- If you use **Home Assistant add-on**: `/config/esphome/`
-- If you use **standalone ESPHome**: `~/.esphome/`
+### Step 2: Replace Config with This
 
-**Copy commands:**
-```bash
-# For Home Assistant add-on:
-cd /var/home/claudio/Development/FingerprintDoorbellOriginal/esphome-package
-cp -r components/fingerprint_doorbell /config/esphome/components/
-cp fingerprint-doorbell.yaml /config/esphome/packages/
-cp example-config.yaml /config/esphome/my-fingerprint-doorbell.yaml
+Delete everything and paste:
 
-# OR for standalone ESPHome:
-cd /var/home/claudio/Development/FingerprintDoorbellOriginal/esphome-package
-cp -r components/fingerprint_doorbell ~/.esphome/components/
-cp fingerprint-doorbell.yaml ~/.esphome/packages/
-cp example-config.yaml ~/.esphome/my-fingerprint-doorbell.yaml
-```
-
-### Step 2: Edit Your Device Config
-
-Open ESPHome dashboard in your browser and edit `my-fingerprint-doorbell.yaml`:
-
-**Update these lines:**
 ```yaml
+substitutions:
+  name: fingerprint-doorbell
+  friendly_name: "Front Door Fingerprint"
+
+# Pull package from GitHub
+packages:
+  fingerprint_doorbell: github://claudio-walser/esphome-fingerprint-doorbell/fingerprint-doorbell.yaml@main
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  platformio_options:
+    platform: espressif32@6.4.0
+
+esp32:
+  board: esp32doit-devkit-v1
+  framework:
+    type: arduino
+
 wifi:
   ssid: "YOUR_WIFI_NAME"      # <-- Change this
   password: "YOUR_WIFI_PASS"  # <-- Change this
+  
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: "12345678"
+
+captive_portal:
 
 api:
   encryption:
-    key: "WILL_BE_GENERATED"  # <-- ESPHome will generate this
+    key: "GENERATE_THIS"  # <-- Click "Generate" in ESPHome
+
+ota:
+  - platform: esphome
+    password: "your_ota_password"
+
+web_server:
+  port: 80
 ```
 
-### Step 3: Click "Install" in ESPHome Dashboard
+### Step 3: Click "Validate"
 
-1. Open ESPHome dashboard (usually http://homeassistant.local:6052)
-2. You should see `my-fingerprint-doorbell`
-3. Click **"Install"**
-4. First time: Click **"Plug into this computer"** (USB required)
-5. Select your ESP32's USB port
-6. Wait 5-10 minutes for first compile
-
-### Step 4: Check Home Assistant
-
-1. Go to **Settings** → **Devices & Services**
-2. Look for **ESPHome** integration
-3. New device should appear: `my-fingerprint-doorbell`
-4. Click **"Configure"** and enter the API key (ESPHome shows it)
+ESPHome will download the package from GitHub automatically!
 
 ### Step 5: Test It!
 

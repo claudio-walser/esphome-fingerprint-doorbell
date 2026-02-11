@@ -7,15 +7,18 @@ substitutions:
 
 # Include the fingerprint doorbell package
 packages:
-  fingerprint_doorbell: !include fingerprint-doorbell.yaml
-  # Or from GitHub (once you publish it):
-  # fingerprint_doorbell: github://YOUR_USERNAME/fingerprint-doorbell-esphome/fingerprint-doorbell.yaml@main
+  fingerprint_doorbell: github://claudio-walser/esphome-fingerprint-doorbell/fingerprint-doorbell.yaml@main
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
-  platform: ESP32
+  platformio_options:
+    platform: espressif32@6.4.0
+
+esp32:
   board: esp32doit-devkit-v1
+  framework:
+    type: arduino
 
 # WiFi configuration
 wifi:
@@ -33,10 +36,60 @@ captive_portal:
 api:
   encryption:
     key: !secret api_encryption_key
+  # Fingerprint management services
+  services:
+    - service: enroll_fingerprint
+      variables:
+        finger_id: int
+        finger_name: string
+      then:
+        - logger.log:
+            format: "Enrolling fingerprint ID %d with name %s"
+            args: [ 'finger_id', 'finger_name.c_str()' ]
+        - lambda: |-
+            id(fp_doorbell).enroll_fingerprint(finger_id, finger_name);
+    
+    - service: delete_fingerprint
+      variables:
+        finger_id: int
+      then:
+        - logger.log:
+            format: "Deleting fingerprint ID %d"
+            args: [ 'finger_id' ]
+        - lambda: |-
+            id(fp_doorbell).delete_fingerprint(finger_id);
+    
+    - service: delete_all_fingerprints
+      then:
+        - logger.log: "Deleting all fingerprints"
+        - lambda: |-
+            id(fp_doorbell).delete_all_fingerprints();
+    
+    - service: rename_fingerprint
+      variables:
+        finger_id: int
+        new_name: string
+      then:
+        - logger.log:
+            format: "Renaming fingerprint ID %d to %s"
+            args: [ 'finger_id', 'new_name.c_str()' ]
+        - lambda: |-
+            id(fp_doorbell).rename_fingerprint(finger_id, new_name);
+    
+    - service: set_ignore_touch_ring
+      variables:
+        state: bool
+      then:
+        - logger.log:
+            format: "Setting ignore touch ring to %d"
+            args: [ 'state' ]
+        - lambda: |-
+            id(fp_doorbell).set_ignore_touch_ring_state(state);
 
 # Enable OTA updates
 ota:
-  password: !secret ota_password
+  - platform: esphome
+    password: !secret ota_password
 
 # Optional: Web server for diagnostics
 web_server:
