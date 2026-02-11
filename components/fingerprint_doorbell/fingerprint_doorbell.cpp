@@ -76,28 +76,40 @@ void FingerprintDoorbell::setup() {
 }
 
 void FingerprintDoorbell::loop() {
+  ESP_LOGD(TAG, ">>> loop() START sensor_connected=%d", this->sensor_connected_);
+  
   // Try to connect sensor (throttle to once per 5 seconds)
   if (!this->sensor_connected_) {
+    ESP_LOGD(TAG, ">>> Not connected, checking throttle");
     uint32_t now = millis();
     if (now - this->last_connect_attempt_ >= 5000) {
+      ESP_LOGD(TAG, ">>> Attempting connection");
       this->last_connect_attempt_ = now;
       this->sensor_connected_ = this->connect_sensor();
       if (this->sensor_connected_) {
         ESP_LOGI(TAG, "Fingerprint sensor connected successfully");
         this->load_fingerprint_names();
+        ESP_LOGD(TAG, ">>> After load_fingerprint_names");
         this->set_led_ring_ready();
+        ESP_LOGD(TAG, ">>> After set_led_ring_ready");
         yield();  // Feed watchdog after sensor operations
+        ESP_LOGD(TAG, ">>> After yield, falling through to scan");
       } else {
+        ESP_LOGD(TAG, ">>> Connection failed, returning");
         return;  // Only return if connection failed
       }
     } else {
+      ESP_LOGD(TAG, ">>> Throttling, returning");
       return;  // Only return if not time to retry yet
     }
   }
 
   // Scan for fingerprints
+  ESP_LOGD(TAG, ">>> About to scan");
   yield();  // Feed watchdog
+  ESP_LOGD(TAG, ">>> Calling scan_fingerprint()");
   Match match = this->scan_fingerprint();
+  ESP_LOGD(TAG, ">>> scan_fingerprint() returned");
 
   // Handle match found
   if (match.scan_result == ScanResult::MATCH_FOUND) {
