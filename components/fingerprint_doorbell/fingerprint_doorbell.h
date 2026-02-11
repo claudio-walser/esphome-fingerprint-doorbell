@@ -75,6 +75,7 @@ class FingerprintDoorbell : public Component, public uart::UARTDevice {
   uint32_t last_match_time_{0};
   uint32_t last_ring_time_{0};
   uint16_t last_match_id_{0};
+  uint32_t last_connect_attempt_{0};
 
   // Internal methods
   bool connect_sensor();

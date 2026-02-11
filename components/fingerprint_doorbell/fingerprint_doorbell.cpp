@@ -36,13 +36,17 @@ void FingerprintDoorbell::setup() {
 }
 
 void FingerprintDoorbell::loop() {
-  // Try to connect sensor on first loop iteration
+  // Try to connect sensor (throttle to once per 5 seconds)
   if (!this->sensor_connected_) {
-    this->sensor_connected_ = this->connect_sensor();
-    if (this->sensor_connected_) {
-      ESP_LOGI(TAG, "Fingerprint sensor connected successfully");
-      this->load_fingerprint_names();
-      this->set_led_ring_ready();
+    uint32_t now = millis();
+    if (now - this->last_connect_attempt_ >= 5000) {
+      this->last_connect_attempt_ = now;
+      this->sensor_connected_ = this->connect_sensor();
+      if (this->sensor_connected_) {
+        ESP_LOGI(TAG, "Fingerprint sensor connected successfully");
+        this->load_fingerprint_names();
+        this->set_led_ring_ready();
+      }
     }
     return;
   }
