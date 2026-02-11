@@ -29,21 +29,21 @@ void FingerprintDoorbell::setup() {
   
   this->finger_ = new Adafruit_Fingerprint(this->hw_serial_);
   
-  // Connect to sensor
-  this->sensor_connected_ = this->connect_sensor();
+  // Don't connect in setup() - do it in loop() to avoid blocking watchdog
+  this->sensor_connected_ = false;
   
-  if (this->sensor_connected_) {
-    ESP_LOGI(TAG, "Fingerprint sensor connected successfully");
-    this->load_fingerprint_names();
-    this->set_led_ring_ready();
-  } else {
-    ESP_LOGE(TAG, "Failed to connect to fingerprint sensor");
-    this->set_led_ring_error();
-  }
+  ESP_LOGI(TAG, "Fingerprint sensor will connect in first loop iteration");
 }
 
 void FingerprintDoorbell::loop() {
+  // Try to connect sensor on first loop iteration
   if (!this->sensor_connected_) {
+    this->sensor_connected_ = this->connect_sensor();
+    if (this->sensor_connected_) {
+      ESP_LOGI(TAG, "Fingerprint sensor connected successfully");
+      this->load_fingerprint_names();
+      this->set_led_ring_ready();
+    }
     return;
   }
 
@@ -131,17 +131,12 @@ void FingerprintDoorbell::dump_config() {
 bool FingerprintDoorbell::connect_sensor() {
   ESP_LOGI(TAG, "Connecting to fingerprint sensor...");
   
-  delay(50);
   if (this->finger_->verifyPassword()) {
     ESP_LOGI(TAG, "Found fingerprint sensor!");
   } else {
-    delay(5000);  // Wait for sensor to boot
-    if (this->finger_->verifyPassword()) {
-      ESP_LOGI(TAG, "Found fingerprint sensor on second try!");
-    } else {
-      ESP_LOGE(TAG, "Did not find fingerprint sensor");
-      return false;
-    }
+    // Don't wait - just fail and retry on next loop
+    ESP_LOGW(TAG, "Fingerprint sensor not responding, will retry...");
+    return false;
   }
 
   // Flash LED to indicate connection
