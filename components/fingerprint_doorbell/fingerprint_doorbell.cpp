@@ -87,9 +87,12 @@ void FingerprintDoorbell::loop() {
         this->load_fingerprint_names();
         this->set_led_ring_ready();
         yield();  // Feed watchdog after sensor operations
+      } else {
+        return;  // Only return if connection failed
       }
+    } else {
+      return;  // Only return if not time to retry yet
     }
-    return;
   }
 
   // Scan for fingerprints
