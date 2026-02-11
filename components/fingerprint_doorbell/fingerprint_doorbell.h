@@ -2,7 +2,6 @@
 
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
-#include "esphome/components/uart/uart.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
@@ -22,7 +21,8 @@ struct Match {
   uint8_t return_code = 0;
 };
 
-class FingerprintDoorbell : public Component, public uart::UARTDevice {
+// Removed uart::UARTDevice inheritance - using Serial2 directly like original code
+class FingerprintDoorbell : public Component {
  public:
   FingerprintDoorbell() = default;
 
