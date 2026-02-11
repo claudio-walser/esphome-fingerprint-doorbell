@@ -23,12 +23,13 @@ void FingerprintDoorbell::setup() {
   }
 
   // Initialize hardware serial for fingerprint sensor
-  // Note: ESPHome UART component configured pins in YAML, but we still need
-  // to initialize Serial2 for the Adafruit library to work
-  // Serial2 on ESP32 defaults to GPIO16 (RX) and GPIO17 (TX) which matches our config
+  // Error 0x01 (FINGERPRINT_PACKETRECIEVEERR) often means TX/RX are swapped
+  // Let's try swapped pins: RX=17, TX=16 instead of the default RX=16, TX=17
   this->hw_serial_ = &Serial2;
-  this->hw_serial_->begin(57600, SERIAL_8N1, 16, 17);  // Explicitly set pins matching YAML uart config
-  delay(50);  // Give sensor time to initialize (from original code)
+  this->hw_serial_->begin(57600, SERIAL_8N1, 17, 16);  // SWAPPED: RX=17, TX=16
+  delay(50);  // Give sensor time to initialize
+  
+  ESP_LOGI(TAG, "Serial2 initialized with SWAPPED pins: RX=GPIO17, TX=GPIO16");
   
   this->finger_ = new Adafruit_Fingerprint(this->hw_serial_);
   
