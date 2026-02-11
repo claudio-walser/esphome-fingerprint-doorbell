@@ -276,7 +276,9 @@ Match FingerprintDoorbell::scan_fingerprint() {
       }
       
       // Non-blocking image capture attempt
+      yield();
       uint8_t result = this->finger_->getImage();
+      yield();
       
       if (result == FINGERPRINT_OK) {
         // Image captured, move to converting
@@ -307,7 +309,9 @@ Match FingerprintDoorbell::scan_fingerprint() {
     
     case ScanState::CONVERTING: {
       // Convert image to features
+      yield();
       uint8_t result = this->finger_->image2Tz();
+      yield();
       if (result != FINGERPRINT_OK) {
         if (result == FINGERPRINT_IMAGEMESS) {
           ESP_LOGW(TAG, "Image too messy");
@@ -326,7 +330,9 @@ Match FingerprintDoorbell::scan_fingerprint() {
     
     case ScanState::SEARCHING: {
       // Search for match
+      yield();
       uint8_t result = this->finger_->fingerSearch();
+      yield();
       
       if (result == FINGERPRINT_OK) {
         // Match found!
