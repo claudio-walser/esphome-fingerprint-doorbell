@@ -86,6 +86,7 @@ void FingerprintDoorbell::loop() {
         ESP_LOGI(TAG, "Fingerprint sensor connected successfully");
         this->load_fingerprint_names();
         this->set_led_ring_ready();
+        yield();  // Feed watchdog after sensor operations
       }
     }
     return;
