@@ -13,11 +13,9 @@ substitutions:
 # External components
 external_components:
   - source:
-      type: git
-      url: https://github.com/claudio-walser/esphome-fingerprint-doorbell
-      ref: main  # Force fresh download of watchdog fix
+      type: local
+      path: components  # Use local emergency fix
     components: [ fingerprint_doorbell ]
-    refresh: 0s
 
 # Required library for fingerprint sensor
 esphome:
@@ -25,14 +23,13 @@ esphome:
   friendly_name: ${friendly_name}
   libraries:
     - "adafruit/Adafruit Fingerprint Sensor Library@^2.1.0"
-  platformio_options:
-    build_flags:
-      - -DCONFIG_ESP_TASK_WDT_TIMEOUT_S=30
 
 esp32:
   board: wemos_d1_mini32
   framework:
     type: arduino
+    sdkconfig_options:
+      CONFIG_ESP_TASK_WDT_TIMEOUT_S: "30"
 
 wifi:
   ssid: !secret wifi_ssid

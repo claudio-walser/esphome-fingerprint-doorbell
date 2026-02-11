@@ -105,7 +105,12 @@ void FingerprintDoorbell::loop() {
     }
   }
 
-  // Scan for fingerprints
+  // Scan for fingerprints - TEMPORARILY DISABLED TO ALLOW BOOT
+  ESP_LOGD(TAG, ">>> Fingerprint scanning disabled to allow boot");
+  yield();  // Feed watchdog
+  return;  // Skip scanning entirely
+  
+  #if 0 // Temporarily disabled
   ESP_LOGD(TAG, ">>> About to scan");
   yield();  // Feed watchdog
   ESP_LOGD(TAG, ">>> Calling scan_fingerprint()");
@@ -175,6 +180,7 @@ void FingerprintDoorbell::loop() {
     bool finger_present = (match.scan_result != ScanResult::NO_FINGER);
     this->finger_sensor_->publish_state(finger_present);
   }
+  #endif // Temporarily disabled
 }
 
 void FingerprintDoorbell::dump_config() {
