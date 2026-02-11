@@ -92,6 +92,7 @@ void FingerprintDoorbell::loop() {
   }
 
   // Scan for fingerprints
+  yield();  // Feed watchdog
   Match match = this->scan_fingerprint();
 
   // Handle match found
@@ -211,9 +212,10 @@ bool FingerprintDoorbell::connect_sensor() {
 
 Match FingerprintDoorbell::scan_fingerprint() {
   Match match;
-  match.scan_result = ScanResult::ERROR;
+  match.scan_result = ScanResult::NO_FINGER;
 
   if (!this->sensor_connected_) {
+    match.scan_result = ScanResult::ERROR;
     return match;
   }
 
@@ -224,92 +226,134 @@ Match FingerprintDoorbell::scan_fingerprint() {
       ring_touched = true;
     }
     
-    if (ring_touched || this->last_touch_state_) {
-      this->update_touch_state(true);
-    } else {
+    if (!ring_touched && !this->last_touch_state_) {
       this->update_touch_state(false);
       match.scan_result = ScanResult::NO_FINGER;
+      this->scan_state_ = ScanState::IDLE;
       return match;
     }
   }
 
-  // Attempt to scan
-  bool do_another_scan = true;
-  int scan_pass = 0;
-  
-  while (do_another_scan) {
-    do_another_scan = false;
-    scan_pass++;
-
-    // Get image
-    uint8_t result = this->finger_->getImage();
+  // State machine for non-blocking scanning
+  switch (this->scan_state_) {
+    case ScanState::IDLE: {
+      // Start new scan
+      this->scan_pass_ = 0;
+      this->imaging_attempt_ = 0;
+      this->scan_start_time_ = millis();
+      this->ring_touched_at_start_ = ring_touched;
+      this->scan_state_ = ScanState::WAITING_FOR_FINGER;
+      this->update_touch_state(true);
+      match.scan_result = ScanResult::NO_FINGER;
+      return match;
+    }
     
-    if (result == FINGERPRINT_OK) {
-      // Image captured successfully
-    } else if (result == FINGERPRINT_NOFINGER) {
-      if (ring_touched && scan_pass < 15) {
-        // Ring touched but no finger yet, keep trying
-        delay(50);
-        do_another_scan = true;
-        continue;
-      } else {
-        if (ring_touched) {
-          // Ring was touched but no finger detected after retries
+    case ScanState::WAITING_FOR_FINGER: {
+      // Timeout check (5 seconds max)
+      if (millis() - this->scan_start_time_ > 5000) {
+        ESP_LOGW(TAG, "Scan timeout");
+        this->scan_state_ = ScanState::IDLE;
+        this->update_touch_state(false);
+        match.scan_result = ScanResult::NO_MATCH_FOUND;
+        return match;
+      }
+      
+      // Non-blocking image capture attempt
+      uint8_t result = this->finger_->getImage();
+      
+      if (result == FINGERPRINT_OK) {
+        // Image captured, move to converting
+        this->scan_state_ = ScanState::CONVERTING;
+        match.scan_result = ScanResult::NO_FINGER;
+        return match;
+      } else if (result == FINGERPRINT_NOFINGER) {
+        // No finger yet
+        this->imaging_attempt_++;
+        if (this->ring_touched_at_start_ && this->imaging_attempt_ >= 15) {
+          // Ring touched but no finger after max attempts
+          this->scan_state_ = ScanState::IDLE;
+          this->update_touch_state(false);
           match.scan_result = ScanResult::NO_MATCH_FOUND;
           return match;
+        }
+        match.scan_result = ScanResult::NO_FINGER;
+        return match;
+      } else {
+        // Error getting image
+        ESP_LOGW(TAG, "Error getting image: 0x%02X", result);
+        this->scan_state_ = ScanState::IDLE;
+        this->update_touch_state(false);
+        match.scan_result = ScanResult::ERROR;
+        return match;
+      }
+    }
+    
+    case ScanState::CONVERTING: {
+      // Convert image to features
+      uint8_t result = this->finger_->image2Tz();
+      if (result != FINGERPRINT_OK) {
+        if (result == FINGERPRINT_IMAGEMESS) {
+          ESP_LOGW(TAG, "Image too messy");
+        }
+        this->scan_state_ = ScanState::IDLE;
+        this->update_touch_state(false);
+        match.scan_result = ScanResult::ERROR;
+        return match;
+      }
+      
+      this->update_touch_state(true);
+      this->scan_state_ = ScanState::SEARCHING;
+      match.scan_result = ScanResult::NO_FINGER;
+      return match;
+    }
+    
+    case ScanState::SEARCHING: {
+      // Search for match
+      uint8_t result = this->finger_->fingerSearch();
+      
+      if (result == FINGERPRINT_OK) {
+        // Match found!
+        this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE);
+        
+        match.scan_result = ScanResult::MATCH_FOUND;
+        match.match_id = this->finger_->fingerID;
+        match.match_confidence = this->finger_->confidence;
+        
+        // Get name from storage
+        if (this->fingerprint_names_.count(match.match_id) > 0) {
+          match.match_name = this->fingerprint_names_[match.match_id];
         } else {
+          match.match_name = "ID " + std::to_string(match.match_id);
+        }
+        
+        this->scan_state_ = ScanState::IDLE;
+        return match;
+        
+      } else if (result == FINGERPRINT_NOTFOUND) {
+        this->scan_pass_++;
+        ESP_LOGD(TAG, "No match found (scan #%d of 5)", this->scan_pass_);
+        
+        if (this->scan_pass_ < 5) {
+          // Try again - reset to waiting for finger
+          this->imaging_attempt_ = 0;
+          this->scan_state_ = ScanState::WAITING_FOR_FINGER;
           match.scan_result = ScanResult::NO_FINGER;
+          return match;
+        } else {
+          // Max attempts reached
+          this->scan_state_ = ScanState::IDLE;
           this->update_touch_state(false);
+          match.scan_result = ScanResult::NO_MATCH_FOUND;
           return match;
         }
-      }
-    } else {
-      // Error getting image
-      match.scan_result = ScanResult::ERROR;
-      return match;
-    }
-
-    // Convert image to features
-    result = this->finger_->image2Tz();
-    if (result != FINGERPRINT_OK) {
-      if (result == FINGERPRINT_IMAGEMESS) {
-        ESP_LOGW(TAG, "Image too messy");
-      }
-      match.scan_result = ScanResult::ERROR;
-      return match;
-    }
-
-    this->update_touch_state(true);
-
-    // Search for match
-    result = this->finger_->fingerSearch();
-    if (result == FINGERPRINT_OK) {
-      // Match found!
-      this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE);
-      
-      match.scan_result = ScanResult::MATCH_FOUND;
-      match.match_id = this->finger_->fingerID;
-      match.match_confidence = this->finger_->confidence;
-      
-      // Get name from storage
-      if (this->fingerprint_names_.count(match.match_id) > 0) {
-        match.match_name = this->fingerprint_names_[match.match_id];
       } else {
-        match.match_name = "ID " + std::to_string(match.match_id);
+        // Search error
+        ESP_LOGW(TAG, "Search error: 0x%02X", result);
+        this->scan_state_ = ScanState::IDLE;
+        this->update_touch_state(false);
+        match.scan_result = ScanResult::ERROR;
+        return match;
       }
-      
-      return match;
-      
-    } else if (result == FINGERPRINT_NOTFOUND) {
-      ESP_LOGD(TAG, "No match found (scan #%d of 5)", scan_pass);
-      match.scan_result = ScanResult::NO_MATCH_FOUND;
-      
-      if (scan_pass < 5) {
-        do_another_scan = true;  // Try up to 5 times
-      }
-    } else {
-      match.scan_result = ScanResult::ERROR;
-      return match;
     }
   }
 

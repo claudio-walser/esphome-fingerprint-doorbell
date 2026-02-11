@@ -77,6 +77,14 @@ class FingerprintDoorbell : public Component {
   uint16_t last_match_id_{0};
   uint32_t last_connect_attempt_{0};
   uint8_t connect_retry_count_{0};
+  
+  // Scan state machine
+  enum class ScanState { IDLE, WAITING_FOR_FINGER, CONVERTING, SEARCHING };
+  ScanState scan_state_{ScanState::IDLE};
+  uint8_t scan_pass_{0};
+  uint8_t imaging_attempt_{0};
+  uint32_t scan_start_time_{0};
+  bool ring_touched_at_start_{false};
 
   // Internal methods
   bool connect_sensor();
