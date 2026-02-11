@@ -22,169 +22,49 @@ void FingerprintDoorbell::setup() {
     this->doorbell_pin_->digital_write(false);
   }
 
-  // AUTO-SCAN MODE: Try to find correct TX/RX pins automatically
-  ESP_LOGI(TAG, "Starting automatic pin detection for R503 sensor...");
+  // Initialize Serial2 with configured pins
+  ESP_LOGI(TAG, "Initializing fingerprint sensor on RX=GPIO%d, TX=GPIO%d", 
+           this->sensor_rx_pin_, this->sensor_tx_pin_);
+  Serial2.begin(57600, SERIAL_8N1, this->sensor_rx_pin_, this->sensor_tx_pin_);
+  delay(50);  // Brief delay for serial init
   
-  // Common ESP32 pin combinations for UART
-  const int rx_candidates[] = {16, 17, 25, 26, 32, 33};
-  const int tx_candidates[] = {16, 17, 25, 26, 32, 33};
-  
-  bool found = false;
-  
-  for (int rx : rx_candidates) {
-    for (int tx : tx_candidates) {
-      if (rx == tx) continue;  // Can't use same pin for RX and TX
-      
-      ESP_LOGD(TAG, "Testing RX=GPIO%d, TX=GPIO%d...", rx, tx);
-      
-      // Try this pin combination
-      Serial2.begin(57600, SERIAL_8N1, rx, tx);
-      delay(100);  // Give time to initialize
-      
-      // Create temporary Adafruit_Fingerprint object
-      Adafruit_Fingerprint test_finger(&Serial2);
-      
-      // Try to verify password
-      uint8_t result = test_finger.verifyPassword();
-      
-      if (result == FINGERPRINT_OK) {
-        ESP_LOGI(TAG, "✓ SUCCESS! Found working pins: RX=GPIO%d, TX=GPIO%d", rx, tx);
-        this->hw_serial_ = &Serial2;
-        this->finger_ = new Adafruit_Fingerprint(this->hw_serial_);
-        found = true;
-        break;
-      } else {
-        ESP_LOGV(TAG, "  Failed with error 0x%02X", result);
-        Serial2.end();  // Clean up for next attempt
-        delay(50);
-      }
-    }
-    if (found) break;
-  }
-  
-  if (!found) {
-    ESP_LOGE(TAG, "✗ Could not find working pin combination!");
-    ESP_LOGE(TAG, "Please check: 1) Sensor power 2) Wiring 3) Sensor functionality");
-    // Initialize anyway with default pins for manual troubleshooting
-    Serial2.begin(57600, SERIAL_8N1, 16, 17);
-    this->hw_serial_ = &Serial2;
-    this->finger_ = new Adafruit_Fingerprint(this->hw_serial_);
-  }
+  this->hw_serial_ = &Serial2;
+  this->finger_ = new Adafruit_Fingerprint(this->hw_serial_);
   
   this->sensor_connected_ = false;
-  ESP_LOGI(TAG, "Fingerprint sensor will connect in first loop iteration");
+  this->last_connect_attempt_ = 0;  // Allow immediate first attempt
 }
 
 void FingerprintDoorbell::loop() {
-  ESP_LOGD(TAG, ">>> loop() START sensor_connected=%d", this->sensor_connected_);
-  
-  // Try to connect sensor (throttle to once per 5 seconds)
+  // Try to connect sensor if not connected (throttled)
   if (!this->sensor_connected_) {
-    ESP_LOGD(TAG, ">>> Not connected, checking throttle");
     uint32_t now = millis();
     if (now - this->last_connect_attempt_ >= 5000) {
-      ESP_LOGD(TAG, ">>> Attempting connection");
       this->last_connect_attempt_ = now;
       this->sensor_connected_ = this->connect_sensor();
       if (this->sensor_connected_) {
         ESP_LOGI(TAG, "Fingerprint sensor connected successfully");
         this->load_fingerprint_names();
-        ESP_LOGD(TAG, ">>> After load_fingerprint_names");
-        // TODO: LEDcontrol blocks for 10+ seconds - needs to be fixed
-        // this->set_led_ring_ready();
-        ESP_LOGD(TAG, ">>> Skipped set_led_ring_ready (blocks watchdog)");
-        yield();  // Feed watchdog after sensor operations
-        ESP_LOGD(TAG, ">>> After yield, falling through to scan");
-      } else {
-        ESP_LOGD(TAG, ">>> Connection failed, returning");
-        return;  // Only return if connection failed
+        this->set_led_ring_ready();
       }
-    } else {
-      ESP_LOGD(TAG, ">>> Throttling, returning");
-      return;  // Only return if not time to retry yet
     }
+    return;
   }
 
-  // Scan for fingerprints - TEMPORARILY DISABLED TO ALLOW BOOT
-  ESP_LOGD(TAG, ">>> Fingerprint scanning disabled to allow boot");
-  yield();  // Feed watchdog
-  return;  // Skip scanning entirely
-  
-  #if 0 // Temporarily disabled
-  ESP_LOGD(TAG, ">>> About to scan");
-  yield();  // Feed watchdog
-  ESP_LOGD(TAG, ">>> Calling scan_fingerprint()");
-  Match match = this->scan_fingerprint();
-  ESP_LOGD(TAG, ">>> scan_fingerprint() returned");
-
-  // Handle match found
-  if (match.scan_result == ScanResult::MATCH_FOUND) {
-    ESP_LOGI(TAG, "Match found: ID=%d, Name=%s, Confidence=%d", 
-             match.match_id, match.match_name.c_str(), match.match_confidence);
-    
-    if (this->match_id_sensor_ != nullptr) {
-      this->match_id_sensor_->publish_state(match.match_id);
-    }
-    if (this->confidence_sensor_ != nullptr) {
-      this->confidence_sensor_->publish_state(match.match_confidence);
-    }
-    if (this->match_name_sensor_ != nullptr) {
-      this->match_name_sensor_->publish_state(match.match_name);
-    }
-    
-    this->last_match_time_ = millis();
-    this->last_match_id_ = match.match_id;
-    
-    // Clear after 3 seconds
-    this->set_timeout(3000, [this]() {
-      if (this->match_id_sensor_ != nullptr) {
-        this->match_id_sensor_->publish_state(-1);
-      }
-      if (this->match_name_sensor_ != nullptr) {
-        this->match_name_sensor_->publish_state("");
-      }
-      if (this->confidence_sensor_ != nullptr) {
-        this->confidence_sensor_->publish_state(0);
-      }
-    });
-  }
-  
-  // Handle no match (doorbell ring)
-  else if (match.scan_result == ScanResult::NO_MATCH_FOUND) {
-    ESP_LOGI(TAG, "No match found - doorbell ring!");
-    
-    if (this->ring_sensor_ != nullptr) {
-      this->ring_sensor_->publish_state(true);
-    }
-    
-    // Trigger doorbell output pin
-    if (this->doorbell_pin_ != nullptr) {
-      this->doorbell_pin_->digital_write(true);
-    }
-    
-    this->last_ring_time_ = millis();
-    
-    // Clear ring state after 1 second
-    this->set_timeout(1000, [this]() {
-      if (this->ring_sensor_ != nullptr) {
-        this->ring_sensor_->publish_state(false);
-      }
-      if (this->doorbell_pin_ != nullptr) {
-        this->doorbell_pin_->digital_write(false);
-      }
-    });
+  // Process enrollment if active
+  if (this->enroll_state_ != EnrollState::IDLE) {
+    this->process_enrollment();
+    return;
   }
 
-  // Update finger detection binary sensor
-  if (this->finger_sensor_ != nullptr) {
-    bool finger_present = (match.scan_result != ScanResult::NO_FINGER);
-    this->finger_sensor_->publish_state(finger_present);
-  }
-  #endif // Temporarily disabled
+  // Normal scan mode
+  this->do_scan();
 }
 
 void FingerprintDoorbell::dump_config() {
   ESP_LOGCONFIG(TAG, "Fingerprint Doorbell:");
+  ESP_LOGCONFIG(TAG, "  Sensor RX Pin: GPIO%d", this->sensor_rx_pin_);
+  ESP_LOGCONFIG(TAG, "  Sensor TX Pin: GPIO%d", this->sensor_tx_pin_);
   LOG_PIN("  Touch Pin: ", this->touch_pin_);
   LOG_PIN("  Doorbell Pin: ", this->doorbell_pin_);
   ESP_LOGCONFIG(TAG, "  Ignore Touch Ring: %s", YESNO(this->ignore_touch_ring_));
@@ -197,35 +77,28 @@ void FingerprintDoorbell::dump_config() {
 }
 
 bool FingerprintDoorbell::connect_sensor() {
-  ESP_LOGI(TAG, "Connecting to fingerprint sensor (attempt %d)...", this->connect_retry_count_ + 1);
+  ESP_LOGI(TAG, "Connecting to fingerprint sensor...");
   
-  // Try to verify password
   uint8_t result = this->finger_->verifyPassword();
   
-  if (result == FINGERPRINT_OK) {
-    ESP_LOGI(TAG, "Found fingerprint sensor!");
-    this->connect_retry_count_ = 0;  // Reset counter on success
-  } else {
-    ESP_LOGW(TAG, "Fingerprint sensor not responding (error code: 0x%02X)", result);
-    
-    // Original code waits longer on first attempt, then retries
-    // After 2-3 attempts with 5-second spacing, sensor should respond if working
+  if (result != FINGERPRINT_OK) {
     this->connect_retry_count_++;
-    
     if (this->connect_retry_count_ >= 3) {
-      ESP_LOGW(TAG, "Sensor still not responding after %d attempts - check wiring and power", this->connect_retry_count_);
+      ESP_LOGW(TAG, "Sensor not responding after %d attempts (error: 0x%02X)", 
+               this->connect_retry_count_, result);
     }
-    
     return false;
   }
-
-  // Flash LED to indicate connection
-  this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_BLUE, 0);
-
+  
+  ESP_LOGI(TAG, "Found fingerprint sensor!");
+  this->connect_retry_count_ = 0;
+  
+  // Brief LED flash to indicate connection
+  this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_BLUE, 3);
+  
   // Get sensor parameters
   this->finger_->getParameters();
   ESP_LOGI(TAG, "Sensor capacity: %d", this->finger_->capacity);
-  ESP_LOGI(TAG, "Security level: %d", this->finger_->security_level);
   
   this->finger_->getTemplateCount();
   ESP_LOGI(TAG, "Sensor contains %d templates", this->finger_->templateCount);
@@ -233,31 +106,23 @@ bool FingerprintDoorbell::connect_sensor() {
   return true;
 }
 
-Match FingerprintDoorbell::scan_fingerprint() {
-  Match match;
-  match.scan_result = ScanResult::NO_FINGER;
-
-  if (!this->sensor_connected_) {
-    match.scan_result = ScanResult::ERROR;
-    return match;
-  }
-
-  // Check touch ring
+void FingerprintDoorbell::do_scan() {
+  // Check touch ring first (if not ignoring)
   bool ring_touched = false;
-  if (!this->ignore_touch_ring_) {
-    if (this->is_ring_touched()) {
-      ring_touched = true;
-    }
+  if (!this->ignore_touch_ring_ && this->touch_pin_ != nullptr) {
+    ring_touched = this->is_ring_touched();
     
+    // If neither touched nor was touched before, skip scanning
     if (!ring_touched && !this->last_touch_state_) {
       this->update_touch_state(false);
-      match.scan_result = ScanResult::NO_FINGER;
+      if (this->finger_sensor_ != nullptr) {
+        this->finger_sensor_->publish_state(false);
+      }
       this->scan_state_ = ScanState::IDLE;
-      return match;
+      return;
     }
   }
 
-  // State machine for non-blocking scanning
   switch (this->scan_state_) {
     case ScanState::IDLE: {
       // Start new scan
@@ -267,223 +132,242 @@ Match FingerprintDoorbell::scan_fingerprint() {
       this->ring_touched_at_start_ = ring_touched;
       this->scan_state_ = ScanState::WAITING_FOR_FINGER;
       this->update_touch_state(true);
-      match.scan_result = ScanResult::NO_FINGER;
-      return match;
+      return;
     }
     
     case ScanState::WAITING_FOR_FINGER: {
       // Timeout check (5 seconds max)
       if (millis() - this->scan_start_time_ > 5000) {
-        ESP_LOGW(TAG, "Scan timeout");
+        ESP_LOGD(TAG, "Scan timeout");
         this->scan_state_ = ScanState::IDLE;
         this->update_touch_state(false);
-        match.scan_result = ScanResult::NO_MATCH_FOUND;
-        return match;
+        this->publish_ring();
+        return;
       }
       
-      // Non-blocking image capture attempt
-      yield();
       uint8_t result = this->finger_->getImage();
-      yield();
       
       if (result == FINGERPRINT_OK) {
-        // Image captured, move to converting
         this->scan_state_ = ScanState::CONVERTING;
-        match.scan_result = ScanResult::NO_FINGER;
-        return match;
+        return;
       } else if (result == FINGERPRINT_NOFINGER) {
-        // No finger yet
         this->imaging_attempt_++;
         if (this->ring_touched_at_start_ && this->imaging_attempt_ >= 15) {
           // Ring touched but no finger after max attempts
           this->scan_state_ = ScanState::IDLE;
           this->update_touch_state(false);
-          match.scan_result = ScanResult::NO_MATCH_FOUND;
-          return match;
+          this->publish_ring();
         }
-        match.scan_result = ScanResult::NO_FINGER;
-        return match;
+        return;
       } else {
-        // Error getting image
         ESP_LOGW(TAG, "Error getting image: 0x%02X", result);
         this->scan_state_ = ScanState::IDLE;
         this->update_touch_state(false);
-        match.scan_result = ScanResult::ERROR;
-        return match;
+        return;
       }
     }
     
     case ScanState::CONVERTING: {
-      // Convert image to features
-      yield();
       uint8_t result = this->finger_->image2Tz();
-      yield();
       if (result != FINGERPRINT_OK) {
         if (result == FINGERPRINT_IMAGEMESS) {
-          ESP_LOGW(TAG, "Image too messy");
+          ESP_LOGD(TAG, "Image too messy");
         }
         this->scan_state_ = ScanState::IDLE;
         this->update_touch_state(false);
-        match.scan_result = ScanResult::ERROR;
-        return match;
+        return;
       }
       
       this->update_touch_state(true);
       this->scan_state_ = ScanState::SEARCHING;
-      match.scan_result = ScanResult::NO_FINGER;
-      return match;
+      return;
     }
     
     case ScanState::SEARCHING: {
-      // Search for match
-      yield();
       uint8_t result = this->finger_->fingerSearch();
-      yield();
       
       if (result == FINGERPRINT_OK) {
         // Match found!
-        this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE);
-        
-        match.scan_result = ScanResult::MATCH_FOUND;
-        match.match_id = this->finger_->fingerID;
-        match.match_confidence = this->finger_->confidence;
-        
-        // Get name from storage
-        if (this->fingerprint_names_.count(match.match_id) > 0) {
-          match.match_name = this->fingerprint_names_[match.match_id];
+        std::string name;
+        if (this->fingerprint_names_.count(this->finger_->fingerID) > 0) {
+          name = this->fingerprint_names_[this->finger_->fingerID];
         } else {
-          match.match_name = "ID " + std::to_string(match.match_id);
+          name = "ID " + std::to_string(this->finger_->fingerID);
         }
         
+        ESP_LOGI(TAG, "Match found: ID=%d, Name=%s, Confidence=%d", 
+                 this->finger_->fingerID, name.c_str(), this->finger_->confidence);
+        
+        this->publish_match(this->finger_->fingerID, this->finger_->confidence, name);
+        this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE);
+        
+        // Clear match after 3 seconds
+        this->set_timeout(3000, [this]() {
+          this->clear_match();
+          this->set_led_ring_ready();
+        });
+        
         this->scan_state_ = ScanState::IDLE;
-        return match;
+        return;
         
       } else if (result == FINGERPRINT_NOTFOUND) {
         this->scan_pass_++;
         ESP_LOGD(TAG, "No match found (scan #%d of 5)", this->scan_pass_);
         
         if (this->scan_pass_ < 5) {
-          // Try again - reset to waiting for finger
+          // Try again
           this->imaging_attempt_ = 0;
           this->scan_state_ = ScanState::WAITING_FOR_FINGER;
-          match.scan_result = ScanResult::NO_FINGER;
-          return match;
+          return;
         } else {
-          // Max attempts reached
+          // Max attempts reached - doorbell ring
+          this->publish_ring();
           this->scan_state_ = ScanState::IDLE;
           this->update_touch_state(false);
-          match.scan_result = ScanResult::NO_MATCH_FOUND;
-          return match;
+          return;
         }
       } else {
-        // Search error
         ESP_LOGW(TAG, "Search error: 0x%02X", result);
         this->scan_state_ = ScanState::IDLE;
         this->update_touch_state(false);
-        match.scan_result = ScanResult::ERROR;
-        return match;
+        return;
       }
     }
   }
-
-  return match;
 }
 
-void FingerprintDoorbell::update_touch_state(bool touched) {
-  if ((touched != this->last_touch_state_) || (this->ignore_touch_ring_ != this->last_ignore_touch_ring_)) {
-    if (touched) {
-      this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_RED, 0);
-    } else {
-      this->set_led_ring_ready();
+void FingerprintDoorbell::process_enrollment() {
+  uint32_t now = millis();
+  
+  switch (this->enroll_state_) {
+    case EnrollState::WAIT_FINGER_PLACE: {
+      // Timeout check (30 seconds)
+      if (now - this->enroll_timeout_start_ > 30000) {
+        ESP_LOGW(TAG, "Enrollment timeout waiting for finger");
+        this->enroll_state_ = EnrollState::FAILED;
+        return;
+      }
+      
+      uint8_t result = this->finger_->getImage();
+      if (result == FINGERPRINT_OK) {
+        ESP_LOGI(TAG, "Finger detected, capturing pass %d/5", this->enroll_pass_ + 1);
+        this->enroll_state_ = EnrollState::CAPTURING;
+      }
+      return;
     }
+    
+    case EnrollState::CAPTURING: {
+      // Convert image to template
+      uint8_t result = this->finger_->image2Tz(this->enroll_pass_ + 1);
+      if (result != FINGERPRINT_OK) {
+        ESP_LOGW(TAG, "image2Tz failed: 0x%02X", result);
+        this->enroll_state_ = EnrollState::FAILED;
+        return;
+      }
+      
+      ESP_LOGI(TAG, "Pass %d/5 captured successfully", this->enroll_pass_ + 1);
+      this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE);
+      
+      this->enroll_pass_++;
+      
+      if (this->enroll_pass_ >= 5) {
+        // All passes done, create model
+        this->enroll_state_ = EnrollState::CREATE_MODEL;
+      } else {
+        // Wait for finger removal
+        this->enroll_timeout_start_ = now;
+        this->enroll_state_ = EnrollState::WAIT_FINGER_REMOVE;
+      }
+      return;
+    }
+    
+    case EnrollState::WAIT_FINGER_REMOVE: {
+      // Timeout check
+      if (now - this->enroll_timeout_start_ > 10000) {
+        ESP_LOGW(TAG, "Timeout waiting for finger removal");
+        this->enroll_state_ = EnrollState::FAILED;
+        return;
+      }
+      
+      uint8_t result = this->finger_->getImage();
+      if (result == FINGERPRINT_NOFINGER) {
+        ESP_LOGI(TAG, "Finger removed. Place finger again for pass %d/5", this->enroll_pass_ + 1);
+        this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_PURPLE, 0);
+        this->enroll_timeout_start_ = now;
+        this->enroll_state_ = EnrollState::WAIT_FINGER_PLACE;
+      }
+      return;
+    }
+    
+    case EnrollState::CREATE_MODEL: {
+      ESP_LOGI(TAG, "Creating fingerprint model...");
+      uint8_t result = this->finger_->createModel();
+      if (result != FINGERPRINT_OK) {
+        ESP_LOGE(TAG, "createModel failed: 0x%02X", result);
+        this->enroll_state_ = EnrollState::FAILED;
+        return;
+      }
+      this->enroll_state_ = EnrollState::STORE_MODEL;
+      return;
+    }
+    
+    case EnrollState::STORE_MODEL: {
+      ESP_LOGI(TAG, "Storing fingerprint as ID %d...", this->enroll_id_);
+      uint8_t result = this->finger_->storeModel(this->enroll_id_);
+      if (result != FINGERPRINT_OK) {
+        ESP_LOGE(TAG, "storeModel failed: 0x%02X", result);
+        this->enroll_state_ = EnrollState::FAILED;
+        return;
+      }
+      
+      // Save name
+      this->save_fingerprint_name(this->enroll_id_, this->enroll_name_);
+      ESP_LOGI(TAG, "Enrollment successful for ID %d (%s)", this->enroll_id_, this->enroll_name_.c_str());
+      
+      this->enroll_state_ = EnrollState::DONE;
+      return;
+    }
+    
+    case EnrollState::DONE: {
+      this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_BLUE);
+      this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
+      this->enroll_state_ = EnrollState::IDLE;
+      return;
+    }
+    
+    case EnrollState::FAILED: {
+      ESP_LOGE(TAG, "Enrollment failed");
+      this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_RED);
+      this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
+      this->enroll_state_ = EnrollState::IDLE;
+      return;
+    }
+    
+    case EnrollState::IDLE:
+      return;
   }
-  this->last_touch_state_ = touched;
-  this->last_ignore_touch_ring_ = this->ignore_touch_ring_;
 }
 
-bool FingerprintDoorbell::is_ring_touched() {
-  if (this->touch_pin_ != nullptr) {
-    return this->touch_pin_->digital_read();
-  }
-  return false;
-}
-
-void FingerprintDoorbell::set_led_ring_ready() {
-  if (this->ignore_touch_ring_) {
-    this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_BLUE);
-  } else {
-    this->finger_->LEDcontrol(FINGERPRINT_LED_BREATHING, 100, FINGERPRINT_LED_BLUE);
-  }
-}
-
-void FingerprintDoorbell::set_led_ring_error() {
-  this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_RED);
-}
-
-bool FingerprintDoorbell::enroll_fingerprint(uint16_t id, const std::string &name) {
+void FingerprintDoorbell::enroll_fingerprint(uint16_t id, const std::string &name) {
   if (!this->sensor_connected_) {
     ESP_LOGE(TAG, "Sensor not connected");
-    return false;
+    return;
+  }
+  
+  if (this->enroll_state_ != EnrollState::IDLE) {
+    ESP_LOGW(TAG, "Enrollment already in progress");
+    return;
   }
 
   ESP_LOGI(TAG, "Starting enrollment for ID %d (%s)", id, name.c_str());
   
-  // 5-pass enrollment process
-  for (int pass = 1; pass <= 5; pass++) {
-    ESP_LOGI(TAG, "Place finger (pass %d/5)...", pass);
-    
-    this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_PURPLE, 0);
-    
-    // Wait for finger
-    int timeout = 0;
-    while (this->finger_->getImage() != FINGERPRINT_OK) {
-      delay(100);
-      timeout++;
-      if (timeout > 100) {  // 10 second timeout
-        ESP_LOGE(TAG, "Enrollment timeout");
-        return false;
-      }
-    }
-
-    // Convert image
-    uint8_t result;
-    if (pass <= 2) {
-      result = this->finger_->image2Tz(pass);
-    } else {
-      result = this->finger_->image2Tz(1);
-      if (result == FINGERPRINT_OK) {
-        result = this->finger_->createModel();
-        if (result == FINGERPRINT_OK) {
-          result = this->finger_->storeModel(id);
-        }
-      }
-    }
-
-    if (result != FINGERPRINT_OK) {
-      ESP_LOGE(TAG, "Enrollment failed at pass %d", pass);
-      return false;
-    }
-
-    this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE);
-    
-    ESP_LOGI(TAG, "Pass %d complete. Remove finger.", pass);
-    
-    // Wait for finger removal
-    timeout = 0;
-    while (this->finger_->getImage() != FINGERPRINT_NOFINGER) {
-      delay(100);
-      timeout++;
-      if (timeout > 50) break;
-    }
-  }
-
-  // Save name
-  this->save_fingerprint_name(id, name);
+  this->enroll_id_ = id;
+  this->enroll_name_ = name;
+  this->enroll_pass_ = 0;
+  this->enroll_timeout_start_ = millis();
+  this->enroll_state_ = EnrollState::WAIT_FINGER_PLACE;
   
-  ESP_LOGI(TAG, "Enrollment successful for ID %d", id);
-  this->set_led_ring_ready();
-  
-  return true;
+  this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_PURPLE, 0);
 }
 
 bool FingerprintDoorbell::delete_fingerprint(uint16_t id) {
@@ -498,6 +382,7 @@ bool FingerprintDoorbell::delete_fingerprint(uint16_t id) {
     return true;
   }
   
+  ESP_LOGE(TAG, "Failed to delete fingerprint ID %d: 0x%02X", id, result);
   return false;
 }
 
@@ -508,16 +393,17 @@ bool FingerprintDoorbell::delete_all_fingerprints() {
 
   uint8_t result = this->finger_->emptyDatabase();
   if (result == FINGERPRINT_OK) {
+    // Clear all names from NVS
+    for (auto &pair : this->fingerprint_names_) {
+      this->delete_fingerprint_name(pair.first);
+    }
     this->fingerprint_names_.clear();
-    
-    // Clear from NVS
-    ESPPreferenceObject pref = global_preferences->make_preference<uint8_t>(fnv1_hash("fp_names"));
-    pref.save(&result);  // Just clear it
     
     ESP_LOGI(TAG, "Deleted all fingerprints");
     return true;
   }
   
+  ESP_LOGE(TAG, "Failed to delete all fingerprints: 0x%02X", result);
   return false;
 }
 
@@ -542,26 +428,132 @@ std::string FingerprintDoorbell::get_fingerprint_name(uint16_t id) {
   return "";
 }
 
-void FingerprintDoorbell::load_fingerprint_names() {
-  // Load fingerprint names from NVS
-  // This is a simplified version - you may want to implement proper serialization
-  ESP_LOGI(TAG, "Loading fingerprint names from preferences");
+void FingerprintDoorbell::update_touch_state(bool touched) {
+  if ((touched != this->last_touch_state_) || (this->ignore_touch_ring_ != this->last_ignore_touch_ring_)) {
+    if (touched) {
+      this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_RED, 0);
+    } else {
+      this->set_led_ring_ready();
+    }
+  }
+  this->last_touch_state_ = touched;
+  this->last_ignore_touch_ring_ = this->ignore_touch_ring_;
+}
+
+bool FingerprintDoorbell::is_ring_touched() {
+  if (this->touch_pin_ != nullptr) {
+    return this->touch_pin_->digital_read();
+  }
+  return false;
+}
+
+void FingerprintDoorbell::set_led_ring_ready() {
+  if (this->finger_ == nullptr) return;
   
+  if (this->ignore_touch_ring_) {
+    this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_BLUE);
+  } else {
+    this->finger_->LEDcontrol(FINGERPRINT_LED_BREATHING, 100, FINGERPRINT_LED_BLUE);
+  }
+}
+
+void FingerprintDoorbell::set_led_ring_error() {
+  if (this->finger_ != nullptr) {
+    this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_RED);
+  }
+}
+
+void FingerprintDoorbell::publish_match(uint16_t id, uint16_t confidence, const std::string &name) {
+  if (this->match_id_sensor_ != nullptr) {
+    this->match_id_sensor_->publish_state(id);
+  }
+  if (this->confidence_sensor_ != nullptr) {
+    this->confidence_sensor_->publish_state(confidence);
+  }
+  if (this->match_name_sensor_ != nullptr) {
+    this->match_name_sensor_->publish_state(name);
+  }
+  if (this->finger_sensor_ != nullptr) {
+    this->finger_sensor_->publish_state(true);
+  }
+  
+  this->last_match_time_ = millis();
+  this->last_match_id_ = id;
+}
+
+void FingerprintDoorbell::publish_ring() {
+  ESP_LOGI(TAG, "Doorbell ring!");
+  
+  if (this->ring_sensor_ != nullptr) {
+    this->ring_sensor_->publish_state(true);
+  }
+  
+  if (this->doorbell_pin_ != nullptr) {
+    this->doorbell_pin_->digital_write(true);
+  }
+  
+  this->last_ring_time_ = millis();
+  
+  // Clear ring state after 1 second
+  this->set_timeout(1000, [this]() {
+    if (this->ring_sensor_ != nullptr) {
+      this->ring_sensor_->publish_state(false);
+    }
+    if (this->doorbell_pin_ != nullptr) {
+      this->doorbell_pin_->digital_write(false);
+    }
+  });
+}
+
+void FingerprintDoorbell::clear_match() {
+  if (this->match_id_sensor_ != nullptr) {
+    this->match_id_sensor_->publish_state(-1);
+  }
+  if (this->match_name_sensor_ != nullptr) {
+    this->match_name_sensor_->publish_state("");
+  }
+  if (this->confidence_sensor_ != nullptr) {
+    this->confidence_sensor_->publish_state(0);
+  }
+  if (this->finger_sensor_ != nullptr) {
+    this->finger_sensor_->publish_state(false);
+  }
+}
+
+void FingerprintDoorbell::load_fingerprint_names() {
+  ESP_LOGI(TAG, "Loading fingerprint names from preferences...");
+  
+  // Only load names for IDs that actually exist on the sensor
+  // First get the list of stored templates
+  this->finger_->getTemplateCount();
+  uint16_t count = this->finger_->templateCount;
+  
+  if (count == 0) {
+    ESP_LOGI(TAG, "No fingerprints stored on sensor");
+    return;
+  }
+  
+  // Load names for IDs 1-200, but yield periodically
+  int loaded = 0;
   for (uint16_t i = 1; i <= 200; i++) {
-    yield();  // Feed watchdog during long loop
+    if (i % 20 == 0) {
+      yield();  // Feed watchdog every 20 iterations
+    }
+    
     std::string key = "fp_" + std::to_string(i);
     ESPPreferenceObject pref = global_preferences->make_preference<std::array<char, 32>>(fnv1_hash(key.c_str()));
     
     std::array<char, 32> name_array;
     if (pref.load(&name_array)) {
       std::string name(name_array.data());
-      if (!name.empty() && name != "@empty") {
+      if (!name.empty() && name[0] != '\0' && name != "@empty") {
         this->fingerprint_names_[i] = name;
+        loaded++;
       }
     }
   }
   
-  ESP_LOGI(TAG, "Loaded %d fingerprint names", this->fingerprint_names_.size());
+  ESP_LOGI(TAG, "Loaded %d fingerprint names", loaded);
 }
 
 void FingerprintDoorbell::save_fingerprint_name(uint16_t id, const std::string &name) {

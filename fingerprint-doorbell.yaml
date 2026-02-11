@@ -1,12 +1,11 @@
 # Fingerprint Doorbell ESPHome Package
-# Version 1.0
+# Version 2.0 - Fixed non-blocking implementation
+
 substitutions:
   device_name: doorbell-basement-door
   friendly_name: "Doorbell Basement Door"
-    # API encryption key for Home Assistant
-  # Generate with: esphome fingerprint-doorbell.yaml run
+  # API encryption key for Home Assistant
   api_encryption_key: "/1//X04nj/HzjNFzVk/KtU1xnmryXWXhpBQnfuXcUug="
-
   # OTA password for over-the-air updates
   ota_password: "6cf776e37113992a6aba94ff33f82e54"
 
@@ -14,10 +13,9 @@ substitutions:
 external_components:
   - source:
       type: local
-      path: components  # Use local emergency fix
+      path: components
     components: [ fingerprint_doorbell ]
 
-# Required library for fingerprint sensor
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
@@ -28,14 +26,12 @@ esp32:
   board: wemos_d1_mini32
   framework:
     type: arduino
-    sdkconfig_options:
-      CONFIG_ESP_TASK_WDT_TIMEOUT_S: "30"
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   
-  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  # Enable fallback hotspot in case wifi connection fails
   ap:
     ssid: "${friendly_name} - Wlan"
     password: "12345678"
@@ -49,18 +45,45 @@ captive_portal:
 api:
   encryption:
     key: ${api_encryption_key}
+  services:
+    - service: enroll_fingerprint
+      variables:
+        finger_id: int
+        name: string
+      then:
+        - lambda: |-
+            id(fp_doorbell).enroll_fingerprint(finger_id, name);
+    - service: delete_fingerprint
+      variables:
+        finger_id: int
+      then:
+        - lambda: |-
+            id(fp_doorbell).delete_fingerprint(finger_id);
+    - service: delete_all_fingerprints
+      then:
+        - lambda: |-
+            id(fp_doorbell).delete_all_fingerprints();
+    - service: rename_fingerprint
+      variables:
+        finger_id: int
+        name: string
+      then:
+        - lambda: |-
+            id(fp_doorbell).rename_fingerprint(finger_id, name);
 
 # Enable OTA updates  
 ota:
   - platform: esphome
     password: ${ota_password}
 
-# Main fingerprint doorbell component
-# Note: Uses Serial2 (GPIO16/GPIO17) internally - no UART config needed
+# Fingerprint doorbell component
+# R503 sensor connected via Serial2
 fingerprint_doorbell:
   id: fp_doorbell
-  touch_pin: GPIO5
-  doorbell_pin: GPIO19
+  sensor_rx_pin: 16    # ESP32 RX <- Sensor TX (yellow wire)
+  sensor_tx_pin: 17    # ESP32 TX -> Sensor RX (green wire)
+  touch_pin: GPIO5     # Touch ring input (white wire)
+  doorbell_pin: GPIO19 # Output when no match (doorbell event)
   ignore_touch_ring: false
 
 # Sensors

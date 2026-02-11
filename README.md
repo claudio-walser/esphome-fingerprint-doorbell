@@ -271,10 +271,9 @@ fingerprint_doorbell:
 
 ### Customize UART Pins
 ```yaml
-uart:
-  tx_pin: GPIO17  # Default
-  rx_pin: GPIO16  # Default
-  baud_rate: 57600  # Do not change!
+fingerprint_doorbell:
+  sensor_rx_pin: 16  # ESP32 RX <- Sensor TX (default GPIO16)
+  sensor_tx_pin: 17  # ESP32 TX -> Sensor RX (default GPIO17)
 ```
 
 ### Customize Sensor Names
@@ -290,7 +289,7 @@ sensor:
 ## 🔧 Troubleshooting
 
 ### Sensor Not Found
-- Check wiring (especially RX/TX - they should NOT be swapped)
+- Check wiring (RX/TX may need to be swapped - sensor TX goes to ESP32 RX)
 - Verify 3.3V power supply
 - Ensure sensor housing is grounded
 - Check ESPHome logs: `esphome logs fingerprint-doorbell-front.yaml`
