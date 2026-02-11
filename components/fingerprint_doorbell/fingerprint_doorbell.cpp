@@ -23,9 +23,12 @@ void FingerprintDoorbell::setup() {
   }
 
   // Initialize hardware serial for fingerprint sensor
-  // ESPHome UART component handles the actual serial, we wrap it with Adafruit library
+  // Note: ESPHome UART component configured pins in YAML, but we still need
+  // to initialize Serial2 for the Adafruit library to work
+  // Serial2 on ESP32 defaults to GPIO16 (RX) and GPIO17 (TX) which matches our config
   this->hw_serial_ = &Serial2;
-  this->hw_serial_->begin(57600);
+  this->hw_serial_->begin(57600, SERIAL_8N1, 16, 17);  // Explicitly set pins matching YAML uart config
+  delay(50);  // Give sensor time to initialize (from original code)
   
   this->finger_ = new Adafruit_Fingerprint(this->hw_serial_);
   
@@ -133,13 +136,25 @@ void FingerprintDoorbell::dump_config() {
 }
 
 bool FingerprintDoorbell::connect_sensor() {
-  ESP_LOGI(TAG, "Connecting to fingerprint sensor...");
+  ESP_LOGI(TAG, "Connecting to fingerprint sensor (attempt %d)...", this->connect_retry_count_ + 1);
   
-  if (this->finger_->verifyPassword()) {
+  // Try to verify password
+  uint8_t result = this->finger_->verifyPassword();
+  
+  if (result == FINGERPRINT_OK) {
     ESP_LOGI(TAG, "Found fingerprint sensor!");
+    this->connect_retry_count_ = 0;  // Reset counter on success
   } else {
-    // Don't wait - just fail and retry on next loop
-    ESP_LOGW(TAG, "Fingerprint sensor not responding, will retry...");
+    ESP_LOGW(TAG, "Fingerprint sensor not responding (error code: 0x%02X)", result);
+    
+    // Original code waits longer on first attempt, then retries
+    // After 2-3 attempts with 5-second spacing, sensor should respond if working
+    this->connect_retry_count_++;
+    
+    if (this->connect_retry_count_ >= 3) {
+      ESP_LOGW(TAG, "Sensor still not responding after %d attempts - check wiring and power", this->connect_retry_count_);
+    }
+    
     return false;
   }
 
