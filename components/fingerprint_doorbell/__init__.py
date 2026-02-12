@@ -9,6 +9,7 @@ CONF_FINGERPRINT_DOORBELL_ID = "fingerprint_doorbell_id"
 CONF_TOUCH_PIN = "touch_pin"
 CONF_DOORBELL_PIN = "doorbell_pin"
 CONF_IGNORE_TOUCH_RING = "ignore_touch_ring"
+CONF_API_TOKEN = "api_token"
 
 fingerprint_doorbell_ns = cg.esphome_ns.namespace("fingerprint_doorbell")
 FingerprintDoorbell = fingerprint_doorbell_ns.class_(
@@ -28,6 +29,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_TOUCH_PIN): pins.gpio_input_pin_schema,
         cv.Optional(CONF_DOORBELL_PIN): pins.gpio_output_pin_schema,
         cv.Optional(CONF_IGNORE_TOUCH_RING, default=False): cv.boolean,
+        cv.Optional(CONF_API_TOKEN): cv.string,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -135,3 +137,6 @@ async def to_code(config):
         cg.add(var.set_doorbell_pin(doorbell_pin))
 
     cg.add(var.set_ignore_touch_ring(config[CONF_IGNORE_TOUCH_RING]))
+
+    if CONF_API_TOKEN in config:
+        cg.add(var.set_api_token(config[CONF_API_TOKEN]))

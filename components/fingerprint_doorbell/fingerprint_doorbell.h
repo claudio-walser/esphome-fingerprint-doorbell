@@ -38,6 +38,7 @@ class FingerprintDoorbell : public Component {
   void set_touch_pin(GPIOPin *pin) { touch_pin_ = pin; }
   void set_doorbell_pin(GPIOPin *pin) { doorbell_pin_ = pin; }
   void set_ignore_touch_ring(bool ignore) { ignore_touch_ring_ = ignore; }
+  void set_api_token(const std::string &token) { api_token_ = token; }
 
   // Sensor setters
   void set_match_id_sensor(sensor::Sensor *sensor) { match_id_sensor_ = sensor; }
@@ -60,12 +61,14 @@ class FingerprintDoorbell : public Component {
   std::string get_fingerprint_list_json();
   bool is_enrolling() { return mode_ == Mode::ENROLL; }
   bool is_sensor_connected() { return sensor_connected_; }
+  std::string get_api_token() { return api_token_; }
 
  protected:
   GPIOPin *touch_pin_{nullptr};
   GPIOPin *doorbell_pin_{nullptr};
   bool ignore_touch_ring_{false};
   bool last_ignore_touch_ring_{false};
+  std::string api_token_{};
 
   // Sensors
   sensor::Sensor *match_id_sensor_{nullptr};

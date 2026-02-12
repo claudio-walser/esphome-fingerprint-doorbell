@@ -69,6 +69,7 @@ fingerprint_doorbell:
   touch_pin: GPIO5     # Touch ring input (white wire)
   doorbell_pin: GPIO19 # Output when no match (doorbell event)
   ignore_touch_ring: false
+  api_token: ${api_encryption_key}  # Protects REST API endpoints
 
 # Sensors
 sensor:

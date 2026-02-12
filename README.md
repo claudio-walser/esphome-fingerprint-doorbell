@@ -349,6 +349,37 @@ curl -X POST "http://192.168.1.100/fingerprint/rename?id=1&name=John%20Smith"
 {"status": "renamed", "id": 1, "name": "John Smith"}
 ```
 
+#### REST API Authentication
+
+The REST API can be protected with a Bearer token. Configure `api_token` in your component:
+
+```yaml
+fingerprint_doorbell:
+  id: fp_doorbell
+  api_token: "your-secret-token-here"  # Or use ${api_encryption_key}
+```
+
+Then include the token in your requests:
+
+```bash
+# With authentication
+curl -H "Authorization: Bearer your-secret-token-here" \
+  http://192.168.1.100/fingerprint/list
+
+# POST requests also need -d ""
+curl -X POST -d "" \
+  -H "Authorization: Bearer your-secret-token-here" \
+  "http://192.168.1.100/fingerprint/enroll?id=1&name=John"
+```
+
+**Without a token configured:** API is open (for development/testing)
+**With a token configured:** All endpoints require `Authorization: Bearer <token>` header
+
+**Response when unauthorized:**
+```json
+{"error": "Unauthorized"}
+```
+
 ---
 
 ### Additional Text Sensors

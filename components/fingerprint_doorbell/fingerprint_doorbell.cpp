@@ -664,7 +664,29 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     return url.rfind("/fingerprint/", 0) == 0;  // starts_with equivalent
   }
   
+  bool check_auth(AsyncWebServerRequest *request) const {
+    std::string token = this->parent_->get_api_token();
+    if (token.empty()) {
+      return true;  // No token configured, allow access
+    }
+    
+    // Check Authorization header: "Bearer <token>"
+    if (!request->hasHeader("Authorization")) {
+      return false;
+    }
+    
+    std::string auth_header = request->getHeader("Authorization")->value();
+    std::string expected = "Bearer " + token;
+    return auth_header == expected;
+  }
+  
   void handleRequest(AsyncWebServerRequest *request) override {
+    // Check authorization for all endpoints
+    if (!this->check_auth(request)) {
+      request->send(401, "application/json", "{\"error\":\"Unauthorized\"}");
+      return;
+    }
+    
     std::string url = request->url();
     
     // GET /fingerprint/list - Get list of enrolled fingerprints
