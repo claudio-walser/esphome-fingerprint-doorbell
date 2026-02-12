@@ -2,7 +2,7 @@
 # Include this in your device configuration via packages:
 #
 #   packages:
-#     fingerprint_doorbell: !include github://claudio-walser/esphome-fingerprint-doorbell/fingerprint-doorbell.yaml@main
+#     fingerprint_doorbell: github://claudio-walser/esphome-fingerprint-doorbell/fingerprint-doorbell.yaml@main
 #
 # Required substitutions in your device config:
 #   - api_encryption_key
