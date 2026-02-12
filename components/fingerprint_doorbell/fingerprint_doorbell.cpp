@@ -671,13 +671,13 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     }
     
     // Check Authorization header: "Bearer <token>"
-    if (!request->hasHeader("Authorization")) {
+    auto auth_header = request->get_header("Authorization");
+    if (!auth_header.has_value()) {
       return false;
     }
     
-    std::string auth_header = request->getHeader("Authorization")->value();
     std::string expected = "Bearer " + token;
-    return auth_header == expected;
+    return auth_header.value() == expected;
   }
   
   void handleRequest(AsyncWebServerRequest *request) override {
