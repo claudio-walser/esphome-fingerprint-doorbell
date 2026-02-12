@@ -648,12 +648,12 @@ class FingerprintRequestHandler : public AsyncWebHandler {
  public:
   FingerprintRequestHandler(FingerprintDoorbell *parent) : parent_(parent) {}
   
-  bool canHandle(AsyncWebServerRequest *request) {
+  bool canHandle(AsyncWebServerRequest *request) const override {
     std::string url = request->url();
     return url.rfind("/fingerprint/", 0) == 0;  // starts_with equivalent
   }
   
-  void handleRequest(AsyncWebServerRequest *request) {
+  void handleRequest(AsyncWebServerRequest *request) override {
     std::string url = request->url();
     
     // GET /fingerprint/list - Get list of enrolled fingerprints
