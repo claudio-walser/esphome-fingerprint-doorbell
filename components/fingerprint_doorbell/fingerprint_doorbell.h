@@ -21,17 +21,6 @@ struct Match {
   uint8_t return_code = 0;
 };
 
-enum class EnrollState {
-  IDLE,
-  WAIT_FINGER_PLACE,
-  CAPTURING,
-  WAIT_FINGER_REMOVE,
-  CREATE_MODEL,
-  STORE_MODEL,
-  DONE,
-  FAILED
-};
-
 class FingerprintDoorbell : public Component {
  public:
   FingerprintDoorbell() = default;
@@ -45,7 +34,6 @@ class FingerprintDoorbell : public Component {
   void set_touch_pin(GPIOPin *pin) { touch_pin_ = pin; }
   void set_doorbell_pin(GPIOPin *pin) { doorbell_pin_ = pin; }
   void set_ignore_touch_ring(bool ignore) { ignore_touch_ring_ = ignore; }
-  void set_sensor_pins(int rx, int tx) { sensor_rx_pin_ = rx; sensor_tx_pin_ = tx; }
 
   // Sensor setters
   void set_match_id_sensor(sensor::Sensor *sensor) { match_id_sensor_ = sensor; }
@@ -55,22 +43,19 @@ class FingerprintDoorbell : public Component {
   void set_finger_sensor(binary_sensor::BinarySensor *sensor) { finger_sensor_ = sensor; }
 
   // Public methods for services
-  void enroll_fingerprint(uint16_t id, const std::string &name);
+  bool enroll_fingerprint(uint16_t id, const std::string &name);
   bool delete_fingerprint(uint16_t id);
   bool delete_all_fingerprints();
   bool rename_fingerprint(uint16_t id, const std::string &new_name);
   void set_ignore_touch_ring_state(bool state) { ignore_touch_ring_ = state; }
   uint16_t get_enrolled_count();
   std::string get_fingerprint_name(uint16_t id);
-  bool is_enrolling() const { return enroll_state_ != EnrollState::IDLE; }
 
  protected:
   GPIOPin *touch_pin_{nullptr};
   GPIOPin *doorbell_pin_{nullptr};
   bool ignore_touch_ring_{false};
   bool last_ignore_touch_ring_{false};
-  int sensor_rx_pin_{16};
-  int sensor_tx_pin_{17};
 
   // Sensors
   sensor::Sensor *match_id_sensor_{nullptr};
@@ -91,26 +76,10 @@ class FingerprintDoorbell : public Component {
   uint16_t last_match_id_{0};
   uint32_t last_connect_attempt_{0};
   uint8_t connect_retry_count_{0};
-  
-  // Scan state machine
-  enum class ScanState { IDLE, WAITING_FOR_FINGER, CONVERTING, SEARCHING };
-  ScanState scan_state_{ScanState::IDLE};
-  uint8_t scan_pass_{0};
-  uint8_t imaging_attempt_{0};
-  uint32_t scan_start_time_{0};
-  bool ring_touched_at_start_{false};
-
-  // Enrollment state machine
-  EnrollState enroll_state_{EnrollState::IDLE};
-  uint16_t enroll_id_{0};
-  std::string enroll_name_;
-  uint8_t enroll_pass_{0};
-  uint32_t enroll_timeout_start_{0};
 
   // Internal methods
   bool connect_sensor();
-  void do_scan();
-  void process_enrollment();
+  Match scan_fingerprint();
   void update_touch_state(bool touched);
   bool is_ring_touched();
   void set_led_ring_ready();
@@ -118,9 +87,6 @@ class FingerprintDoorbell : public Component {
   void load_fingerprint_names();
   void save_fingerprint_name(uint16_t id, const std::string &name);
   void delete_fingerprint_name(uint16_t id);
-  void publish_match(uint16_t id, uint16_t confidence, const std::string &name);
-  void publish_ring();
-  void clear_match();
 };
 
 }  // namespace fingerprint_doorbell

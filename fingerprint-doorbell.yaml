@@ -12,9 +12,11 @@ substitutions:
 # External components
 external_components:
   - source:
-      type: local
-      path: components
+      type: git
+      url: https://github.com/claudio-walser/esphome-fingerprint-doorbell
+      ref: main
     components: [ fingerprint_doorbell ]
+    refresh: 0s
 
 esphome:
   name: ${device_name}
