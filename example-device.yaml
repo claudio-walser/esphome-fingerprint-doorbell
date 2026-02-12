@@ -5,9 +5,9 @@ substitutions:
   ota_password: "secret-ota-password"
 
 
-# Include the fingerprint doorbell package
+# Include the fingerprint doorbell package from GitHub
 packages:
-  fingerprint_doorbell: !include github://claudio-walser/esphome-fingerprint-doorbell/fingerprint-doorbell.yaml@main
+  fingerprint_doorbell: github://claudio-walser/esphome-fingerprint-doorbell/fingerprint-doorbell.yaml@main
 
 esphome:
   name: ${device_name}
