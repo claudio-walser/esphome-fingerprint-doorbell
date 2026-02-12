@@ -243,7 +243,7 @@ Get list of all enrolled fingerprints.
 
 **Example:**
 ```bash
-curl http://192.168.1.100/fingerprint/list
+curl -H "Authorization: Bearer your-secret-token-here" http://192.168.1.100/fingerprint/list
 ```
 
 **Response:**
@@ -259,7 +259,7 @@ Get current sensor status.
 
 **Example:**
 ```bash
-curl http://192.168.1.100/fingerprint/status
+curl -H "Authorization: Bearer your-secret-token-here" http://192.168.1.100/fingerprint/status
 ```
 
 **Response:**
@@ -280,7 +280,7 @@ Start fingerprint enrollment.
 
 **Example:**
 ```bash
-curl -X POST "http://192.168.1.100/fingerprint/enroll?id=3&name=Alice"
+curl -H "Authorization: Bearer your-secret-token-here" -X POST "http://192.168.1.100/fingerprint/enroll?id=3&name=Alice"
 ```
 
 **Response:**
@@ -295,7 +295,7 @@ Cancel in-progress enrollment.
 
 **Example:**
 ```bash
-curl -X POST http://192.168.1.100/fingerprint/cancel
+curl -H "Authorization: Bearer your-secret-token-here" -X POST http://192.168.1.100/fingerprint/cancel
 ```
 
 **Response:**
@@ -311,7 +311,7 @@ Delete a fingerprint.
 
 **Example:**
 ```bash
-curl -X POST "http://192.168.1.100/fingerprint/delete?id=1"
+curl -H "Authorization: Bearer your-secret-token-here" -X POST "http://192.168.1.100/fingerprint/delete?id=1"
 ```
 
 **Response:**
@@ -324,7 +324,7 @@ Delete all fingerprints.
 
 **Example:**
 ```bash
-curl -X POST http://192.168.1.100/fingerprint/delete_all
+curl -H "Authorization: Bearer your-secret-token-here" -X POST http://192.168.1.100/fingerprint/delete_all
 ```
 
 **Response:**
@@ -341,7 +341,7 @@ Rename a fingerprint.
 
 **Example:**
 ```bash
-curl -X POST "http://192.168.1.100/fingerprint/rename?id=1&name=John%20Smith"
+curl -H "Authorization: Bearer your-secret-token-here" -X POST "http://192.168.1.100/fingerprint/rename?id=1&name=John%20Smith"
 ```
 
 **Response:**
@@ -356,26 +356,23 @@ The REST API can be protected with a Bearer token. Configure `api_token` in your
 ```yaml
 fingerprint_doorbell:
   id: fp_doorbell
-  api_token: "your-secret-token-here"  # Or use ${api_encryption_key}
+  api_token: "your-secret-token-here"
 ```
 
-Then include the token in your requests:
+**Tip:** Reuse your ESPHome API encryption key for convenience:
 
-```bash
-# With authentication
-curl -H "Authorization: Bearer your-secret-token-here" \
-  http://192.168.1.100/fingerprint/list
-
-# POST requests also need -d ""
-curl -X POST -d "" \
-  -H "Authorization: Bearer your-secret-token-here" \
-  "http://192.168.1.100/fingerprint/enroll?id=1&name=John"
+```yaml
+fingerprint_doorbell:
+  id: fp_doorbell
+  api_token: !secret api_encryption_key
 ```
 
-**Without a token configured:** API is open (for development/testing)
-**With a token configured:** All endpoints require `Authorization: Bearer <token>` header
+| Configuration | Behavior |
+|---------------|----------|
+| No `api_token` set | API is open (backward compatible) |
+| `api_token` configured | All endpoints require `Authorization: Bearer <token>` header |
 
-**Response when unauthorized:**
+**Response when unauthorized (HTTP 401):**
 ```json
 {"error": "Unauthorized"}
 ```
