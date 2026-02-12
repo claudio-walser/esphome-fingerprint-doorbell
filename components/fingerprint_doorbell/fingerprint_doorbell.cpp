@@ -648,14 +648,13 @@ class FingerprintRequestHandler : public AsyncWebHandler {
  public:
   FingerprintRequestHandler(FingerprintDoorbell *parent) : parent_(parent) {}
   
-  bool canHandle(AsyncWebServerRequest *request) override {
-    if (request->url().startsWith("/fingerprint/"))
-      return true;
-    return false;
+  bool canHandle(AsyncWebServerRequest *request) {
+    std::string url = request->url();
+    return url.rfind("/fingerprint/", 0) == 0;  // starts_with equivalent
   }
   
-  void handleRequest(AsyncWebServerRequest *request) override {
-    String url = request->url();
+  void handleRequest(AsyncWebServerRequest *request) {
+    std::string url = request->url();
     
     // GET /fingerprint/list - Get list of enrolled fingerprints
     if (url == "/fingerprint/list" && request->method() == HTTP_GET) {
@@ -681,16 +680,18 @@ class FingerprintRequestHandler : public AsyncWebHandler {
         request->send(400, "application/json", "{\"error\":\"Missing id or name parameter\"}");
         return;
       }
-      uint16_t id = request->getParam("id")->value().toInt();
-      String name = request->getParam("name")->value();
+      std::string id_str = request->getParam("id")->value();
+      std::string name = request->getParam("name")->value();
+      uint16_t id = std::atoi(id_str.c_str());
       
       if (id < 1 || id > 200) {
         request->send(400, "application/json", "{\"error\":\"ID must be 1-200\"}");
         return;
       }
       
-      this->parent_->start_enrollment(id, name.c_str());
-      request->send(200, "application/json", "{\"status\":\"enrollment_started\",\"id\":" + String(id) + ",\"name\":\"" + name + "\"}");
+      this->parent_->start_enrollment(id, name);
+      std::string response = "{\"status\":\"enrollment_started\",\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
+      request->send(200, "application/json", response.c_str());
       return;
     }
     
@@ -707,10 +708,12 @@ class FingerprintRequestHandler : public AsyncWebHandler {
         request->send(400, "application/json", "{\"error\":\"Missing id parameter\"}");
         return;
       }
-      uint16_t id = request->getParam("id")->value().toInt();
+      std::string id_str = request->getParam("id")->value();
+      uint16_t id = std::atoi(id_str.c_str());
       
       if (this->parent_->delete_fingerprint(id)) {
-        request->send(200, "application/json", "{\"status\":\"deleted\",\"id\":" + String(id) + "}");
+        std::string response = "{\"status\":\"deleted\",\"id\":" + std::to_string(id) + "}";
+        request->send(200, "application/json", response.c_str());
       } else {
         request->send(500, "application/json", "{\"error\":\"Delete failed\"}");
       }
@@ -733,11 +736,13 @@ class FingerprintRequestHandler : public AsyncWebHandler {
         request->send(400, "application/json", "{\"error\":\"Missing id or name parameter\"}");
         return;
       }
-      uint16_t id = request->getParam("id")->value().toInt();
-      String name = request->getParam("name")->value();
+      std::string id_str = request->getParam("id")->value();
+      std::string name = request->getParam("name")->value();
+      uint16_t id = std::atoi(id_str.c_str());
       
-      if (this->parent_->rename_fingerprint(id, name.c_str())) {
-        request->send(200, "application/json", "{\"status\":\"renamed\",\"id\":" + String(id) + ",\"name\":\"" + name + "\"}");
+      if (this->parent_->rename_fingerprint(id, name)) {
+        std::string response = "{\"status\":\"renamed\",\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
+        request->send(200, "application/json", response.c_str());
       } else {
         request->send(500, "application/json", "{\"error\":\"Rename failed\"}");
       }
