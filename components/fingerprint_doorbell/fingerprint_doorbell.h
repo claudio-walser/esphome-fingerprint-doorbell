@@ -32,7 +32,7 @@ class FingerprintDoorbell : public Component {
   void setup() override;
   void loop() override;
   void dump_config() override;
-  float get_setup_priority() const override { return setup_priority::DATA; }
+  float get_setup_priority() const override { return setup_priority::WIFI - 1.0f; }
 
   // Configuration setters
   void set_touch_pin(GPIOPin *pin) { touch_pin_ = pin; }

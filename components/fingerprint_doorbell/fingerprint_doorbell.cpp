@@ -763,6 +763,7 @@ void FingerprintDoorbell::setup_web_server() {
     return;
   }
   
+  base->init();
   base->add_handler(new FingerprintRequestHandler(this));
   ESP_LOGI(TAG, "REST API registered at /fingerprint/*");
 }
