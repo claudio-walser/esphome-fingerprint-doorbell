@@ -1,42 +1,25 @@
 # Fingerprint Doorbell ESPHome Package
-# Version 2.1 - Added REST API and Home Assistant Actions
+# Include this in your device configuration via packages:
+#
+#   packages:
+#     fingerprint_doorbell: !include github://claudio-walser/esphome-fingerprint-doorbell/fingerprint-doorbell.yaml@main
+#
+# Required substitutions in your device config:
+#   - api_encryption_key
 
-substitutions:
-  device_name: doorbell-basement-door
-  friendly_name: "Doorbell Basement Door"
-  # API encryption key for Home Assistant
-  api_encryption_key: "/1//X04nj/HzjNFzVk/KtU1xnmryXWXhpBQnfuXcUug="
-  # OTA password for over-the-air updates
-  ota_password: "6cf776e37113992a6aba94ff33f82e54"
 
 # External components
 external_components:
   - source:
       type: git
       url: https://github.com/claudio-walser/esphome-fingerprint-doorbell
-      ref: security
+      ref: main
     components: [ fingerprint_doorbell ]
     refresh: 0s
 
 esphome:
-  name: ${device_name}
-  friendly_name: ${friendly_name}
   libraries:
     - "adafruit/Adafruit Fingerprint Sensor Library@^2.1.0"
-
-esp32:
-  board: wemos_d1_mini32
-  framework:
-    type: arduino
-
-wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-  
-  # Enable fallback hotspot in case wifi connection fails
-  ap:
-    ssid: "${friendly_name} - Wlan"
-    password: "12345678"
 
 # Web server for REST API endpoints
 # REST API available at /fingerprint/*
@@ -47,20 +30,6 @@ wifi:
 #   POST /fingerprint/delete     - Delete fingerprint (?id=X)
 #   POST /fingerprint/delete_all - Delete all fingerprints
 #   POST /fingerprint/rename     - Rename fingerprint (?id=X&name=Y)
-web_server:
-  port: 80
-
-captive_portal:
-
-# Enable Home Assistant API
-api:
-  encryption:
-    key: ${api_encryption_key}
-
-# Enable OTA updates  
-ota:
-  - platform: esphome
-    password: ${ota_password}
 
 # Fingerprint doorbell component
 # R503 sensor connected via Serial2 (GPIO16=RX, GPIO17=TX)
@@ -104,36 +73,3 @@ binary_sensor:
     finger:
       name: "Finger Detected"
       id: fp_finger
-
-# Example buttons for fingerprint management
-# Uncomment and modify as needed
-#
-# button:
-#   - platform: template
-#     name: "Enroll John (ID 1)"
-#     on_press:
-#       - fingerprint_doorbell.enroll:
-#           finger_id: 1
-#           name: "John"
-#
-#   - platform: template
-#     name: "Cancel Enrollment"
-#     on_press:
-#       - fingerprint_doorbell.cancel_enroll
-#
-#   - platform: template
-#     name: "Delete ID 1"
-#     on_press:
-#       - fingerprint_doorbell.delete:
-#           finger_id: 1
-#
-#   - platform: template
-#     name: "Delete All"
-#     on_press:
-#       - fingerprint_doorbell.delete_all
-
-# Logging
-logger:
-  level: DEBUG
-  logs:
-    fingerprint_doorbell: DEBUG
