@@ -13,13 +13,13 @@ CONF_LAST_ACTION = "last_action"
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_FINGERPRINT_DOORBELL_ID): cv.use_id(FingerprintDoorbell),
-        cv.Optional(CONF_MATCH_NAME): text_sensor.text_sensor_schema(
+        cv.Optional("match_name"): text_sensor.text_sensor_schema(
             icon=ICON_FINGERPRINT,
         ),
-        cv.Optional(CONF_ENROLL_STATUS): text_sensor.text_sensor_schema(
+        cv.Optional("enroll_status"): text_sensor.text_sensor_schema(
             icon="mdi:account-plus",
         ),
-        cv.Optional(CONF_LAST_ACTION): text_sensor.text_sensor_schema(
+        cv.Optional("last_action"): text_sensor.text_sensor_schema(
             icon="mdi:history",
         ),
     }
