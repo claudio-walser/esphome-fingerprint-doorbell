@@ -1,9 +1,7 @@
 substitutions:
   device_name: doorbell-basement-door
   friendly_name: "Doorbell Basement Door"
-  # API encryption key for Home Assistant
   api_encryption_key: "secret-api-key"
-  # OTA password for over-the-air updates
   ota_password: "secret-ota-password"
 
 
