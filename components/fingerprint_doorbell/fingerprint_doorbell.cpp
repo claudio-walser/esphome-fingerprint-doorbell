@@ -2,6 +2,7 @@
 #include "esphome/core/log.h"
 #include "esphome/core/preferences.h"
 #include "esphome/core/helpers.h"
+#include "esphome/core/application.h"
 
 namespace esphome {
 namespace fingerprint_doorbell {
@@ -119,45 +120,48 @@ void FingerprintDoorbell::dump_config() {
 }
 
 bool FingerprintDoorbell::connect_sensor() {
-  ESP_LOGI(TAG, "Connecting to fingerprint sensor...");
+  ESP_LOGI(TAG, "Connecting to fingerprint sensor (attempt %d)...", this->connect_attempts_ + 1);
   
   if (this->finger_ == nullptr) {
     ESP_LOGE(TAG, "Fingerprint object not initialized!");
     return false;
   }
 
-  // Call begin() - this is exactly what the original code does
-  // The library initializes Serial2 internally
-  this->finger_->begin(57600);
-  delay(50);
+  // Only call begin() on first attempt
+  if (this->connect_attempts_ == 0) {
+    this->finger_->begin(57600);
+    App.feed_wdt();  // Feed watchdog
+  }
   
-  // First attempt
+  this->connect_attempts_++;
+  
+  // Try to verify password (non-blocking - just one attempt per call)
   if (this->finger_->verifyPassword()) {
     ESP_LOGI(TAG, "Found fingerprint sensor!");
-  } else {
-    // Wait longer for sensor (especially after OTA)
-    delay(5000);
-    if (this->finger_->verifyPassword()) {
-      ESP_LOGI(TAG, "Found fingerprint sensor (2nd attempt)!");
-    } else {
-      ESP_LOGE(TAG, "Did not find fingerprint sensor");
-      return false;
-    }
+    
+    // Startup LED signal
+    this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_BLUE, 0);
+
+    // Read sensor parameters
+    ESP_LOGI(TAG, "Reading sensor parameters");
+    this->finger_->getParameters();
+    ESP_LOGI(TAG, "Status: 0x%02X, Capacity: %d, Security: %d", 
+             this->finger_->status_reg, this->finger_->capacity, this->finger_->security_level);
+
+    this->finger_->getTemplateCount();
+    ESP_LOGI(TAG, "Sensor contains %d templates", this->finger_->templateCount);
+    
+    this->connect_attempts_ = 0;  // Reset for future reconnects
+    return true;
   }
-
-  // Startup LED signal
-  this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_BLUE, 0);
-
-  // Read sensor parameters
-  ESP_LOGI(TAG, "Reading sensor parameters");
-  this->finger_->getParameters();
-  ESP_LOGI(TAG, "Status: 0x%02X, Capacity: %d, Security: %d", 
-           this->finger_->status_reg, this->finger_->capacity, this->finger_->security_level);
-
-  this->finger_->getTemplateCount();
-  ESP_LOGI(TAG, "Sensor contains %d templates", this->finger_->templateCount);
-
-  return true;
+  
+  // Allow up to 10 attempts (5 seconds interval * 10 = 50 seconds total)
+  if (this->connect_attempts_ >= 10) {
+    ESP_LOGE(TAG, "Did not find fingerprint sensor after %d attempts", this->connect_attempts_);
+    this->connect_attempts_ = 0;  // Reset for future retries
+  }
+  
+  return false;
 }
 
 Match FingerprintDoorbell::scan_fingerprint() {

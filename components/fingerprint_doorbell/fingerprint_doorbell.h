@@ -75,7 +75,7 @@ class FingerprintDoorbell : public Component {
   uint32_t last_ring_time_{0};
   uint16_t last_match_id_{0};
   uint32_t last_connect_attempt_{0};
-  uint8_t connect_retry_count_{0};
+  uint8_t connect_attempts_{0};
 
   // Internal methods
   bool connect_sensor();

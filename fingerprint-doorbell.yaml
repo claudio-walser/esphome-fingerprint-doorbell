@@ -82,8 +82,6 @@ ota:
 # R503 sensor connected via Serial2
 fingerprint_doorbell:
   id: fp_doorbell
-  sensor_rx_pin: 16    # ESP32 RX <- Sensor TX (yellow wire)
-  sensor_tx_pin: 17    # ESP32 TX -> Sensor RX (green wire)
   touch_pin: GPIO5     # Touch ring input (white wire)
   doorbell_pin: GPIO19 # Output when no match (doorbell event)
   ignore_touch_ring: false
