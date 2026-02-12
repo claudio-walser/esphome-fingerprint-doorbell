@@ -127,10 +127,17 @@ bool FingerprintDoorbell::connect_sensor() {
     return false;
   }
 
-  // Only call begin() on first attempt
+  // Only initialize serial on first attempt
   if (this->connect_attempts_ == 0) {
+    // Explicitly initialize Serial2 with pins for ESP-IDF framework
+    // RX=GPIO16, TX=GPIO17 are the default Serial2 pins on ESP32
+    mySerial.begin(57600, SERIAL_8N1, 16, 17);
+    delay(100);  // Give serial time to initialize
+    App.feed_wdt();
+    
+    // Now tell Adafruit library what baud rate we're using
     this->finger_->begin(57600);
-    App.feed_wdt();  // Feed watchdog
+    App.feed_wdt();
   }
   
   this->connect_attempts_++;
