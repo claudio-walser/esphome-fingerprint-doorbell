@@ -1,5 +1,5 @@
 # Fingerprint Doorbell ESPHome Package
-# Version 2.0 - Fixed non-blocking implementation
+# Version 2.1 - Added REST API and Home Assistant Actions
 
 substitutions:
   device_name: doorbell-basement-door
@@ -38,6 +38,15 @@ wifi:
     ssid: "${friendly_name} - Wlan"
     password: "12345678"
 
+# Web server for REST API endpoints
+# REST API available at /fingerprint/*
+#   GET  /fingerprint/list       - List all fingerprints
+#   GET  /fingerprint/status     - Get sensor status
+#   POST /fingerprint/enroll     - Start enrollment (?id=X&name=Y)
+#   POST /fingerprint/cancel     - Cancel enrollment
+#   POST /fingerprint/delete     - Delete fingerprint (?id=X)
+#   POST /fingerprint/delete_all - Delete all fingerprints
+#   POST /fingerprint/rename     - Rename fingerprint (?id=X&name=Y)
 web_server:
   port: 80
 
@@ -47,31 +56,6 @@ captive_portal:
 api:
   encryption:
     key: ${api_encryption_key}
-  services:
-    - service: enroll_fingerprint
-      variables:
-        finger_id: int
-        name: string
-      then:
-        - lambda: |-
-            id(fp_doorbell).enroll_fingerprint(finger_id, name);
-    - service: delete_fingerprint
-      variables:
-        finger_id: int
-      then:
-        - lambda: |-
-            id(fp_doorbell).delete_fingerprint(finger_id);
-    - service: delete_all_fingerprints
-      then:
-        - lambda: |-
-            id(fp_doorbell).delete_all_fingerprints();
-    - service: rename_fingerprint
-      variables:
-        finger_id: int
-        name: string
-      then:
-        - lambda: |-
-            id(fp_doorbell).rename_fingerprint(finger_id, name);
 
 # Enable OTA updates  
 ota:
@@ -79,7 +63,7 @@ ota:
     password: ${ota_password}
 
 # Fingerprint doorbell component
-# R503 sensor connected via Serial2
+# R503 sensor connected via Serial2 (GPIO16=RX, GPIO17=TX)
 fingerprint_doorbell:
   id: fp_doorbell
   touch_pin: GPIO5     # Touch ring input (white wire)
@@ -103,6 +87,12 @@ text_sensor:
     match_name:
       name: "Fingerprint Match Name"
       id: fp_match_name
+    enroll_status:
+      name: "Enrollment Status"
+      id: fp_enroll_status
+    last_action:
+      name: "Last Action"
+      id: fp_last_action
 
 binary_sensor:
   - platform: fingerprint_doorbell
@@ -113,6 +103,33 @@ binary_sensor:
     finger:
       name: "Finger Detected"
       id: fp_finger
+
+# Example buttons for fingerprint management
+# Uncomment and modify as needed
+#
+# button:
+#   - platform: template
+#     name: "Enroll John (ID 1)"
+#     on_press:
+#       - fingerprint_doorbell.enroll:
+#           finger_id: 1
+#           name: "John"
+#
+#   - platform: template
+#     name: "Cancel Enrollment"
+#     on_press:
+#       - fingerprint_doorbell.cancel_enroll
+#
+#   - platform: template
+#     name: "Delete ID 1"
+#     on_press:
+#       - fingerprint_doorbell.delete:
+#           finger_id: 1
+#
+#   - platform: template
+#     name: "Delete All"
+#     on_press:
+#       - fingerprint_doorbell.delete_all
 
 # Logging
 logger:

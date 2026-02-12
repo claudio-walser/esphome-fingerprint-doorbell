@@ -36,75 +36,109 @@ captive_portal:
 api:
   encryption:
     key: !secret api_encryption_key
-  # Fingerprint management services
-  services:
-    - service: enroll_fingerprint
-      variables:
-        finger_id: int
-        finger_name: string
-      then:
-        - logger.log:
-            format: "Enrolling fingerprint ID %d with name %s"
-            args: [ 'finger_id', 'finger_name.c_str()' ]
-        - lambda: |-
-            id(fp_doorbell).enroll_fingerprint(finger_id, finger_name);
-    
-    - service: delete_fingerprint
-      variables:
-        finger_id: int
-      then:
-        - logger.log:
-            format: "Deleting fingerprint ID %d"
-            args: [ 'finger_id' ]
-        - lambda: |-
-            id(fp_doorbell).delete_fingerprint(finger_id);
-    
-    - service: delete_all_fingerprints
-      then:
-        - logger.log: "Deleting all fingerprints"
-        - lambda: |-
-            id(fp_doorbell).delete_all_fingerprints();
-    
-    - service: rename_fingerprint
-      variables:
-        finger_id: int
-        new_name: string
-      then:
-        - logger.log:
-            format: "Renaming fingerprint ID %d to %s"
-            args: [ 'finger_id', 'new_name.c_str()' ]
-        - lambda: |-
-            id(fp_doorbell).rename_fingerprint(finger_id, new_name);
-    
-    - service: set_ignore_touch_ring
-      variables:
-        state: bool
-      then:
-        - logger.log:
-            format: "Setting ignore touch ring to %d"
-            args: [ 'state' ]
-        - lambda: |-
-            id(fp_doorbell).set_ignore_touch_ring_state(state);
 
 # Enable OTA updates
 ota:
   - platform: esphome
     password: !secret ota_password
 
-# Optional: Web server for diagnostics
+# Enable logging
+logger:
+
+# Web server for REST API and diagnostics
+# REST API available at /fingerprint/*
 web_server:
   port: 80
 
-# Optional: Override default pins if needed
-# fingerprint_doorbell:
-#   touch_pin: GPIO5      # Default
-#   doorbell_pin: GPIO19  # Default
-#   ignore_touch_ring: false  # Set to true if sensor is exposed to rain
+# ============================================
+# Fingerprint Doorbell Configuration
+# ============================================
 
-# Optional: Customize sensor names
-# sensor:
-#   - platform: fingerprint_doorbell
-#     match_id:
-#       name: "Front Door Match ID"
-#     confidence:
-#       name: "Front Door Confidence"
+fingerprint_doorbell:
+  id: fp_doorbell
+  touch_pin: GPIO5       # Touch ring sensor
+  doorbell_pin: GPIO19   # Doorbell output
+  ignore_touch_ring: false  # Set to true if sensor is exposed to rain
+
+# Sensors exposed to Home Assistant
+sensor:
+  - platform: fingerprint_doorbell
+    match_id:
+      name: "${friendly_name} Match ID"
+    confidence:
+      name: "${friendly_name} Confidence"
+
+text_sensor:
+  - platform: fingerprint_doorbell
+    match_name:
+      name: "${friendly_name} Match Name"
+    enroll_status:
+      name: "${friendly_name} Enrollment Status"
+    last_action:
+      name: "${friendly_name} Last Action"
+
+binary_sensor:
+  - platform: fingerprint_doorbell
+    ring:
+      name: "${friendly_name} Doorbell Ring"
+    finger_detected:
+      name: "${friendly_name} Finger Detected"
+
+# ============================================
+# Example Buttons (Optional)
+# ============================================
+# These buttons let you manage fingerprints from Home Assistant
+
+button:
+  # Enroll buttons - create one for each person
+  - platform: template
+    name: "Enroll John (ID 1)"
+    icon: mdi:fingerprint
+    on_press:
+      - fingerprint_doorbell.enroll:
+          finger_id: 1
+          name: "John"
+
+  - platform: template
+    name: "Enroll Jane (ID 2)"
+    icon: mdi:fingerprint
+    on_press:
+      - fingerprint_doorbell.enroll:
+          finger_id: 2
+          name: "Jane"
+
+  # Cancel enrollment
+  - platform: template
+    name: "Cancel Enrollment"
+    icon: mdi:cancel
+    on_press:
+      - fingerprint_doorbell.cancel_enroll
+
+  # Delete buttons
+  - platform: template
+    name: "Delete ID 1"
+    icon: mdi:delete
+    on_press:
+      - fingerprint_doorbell.delete:
+          finger_id: 1
+
+  - platform: template
+    name: "Delete All Fingerprints"
+    icon: mdi:delete-sweep
+    on_press:
+      - fingerprint_doorbell.delete_all
+
+# ============================================
+# Alternative: API Services (Legacy approach)
+# ============================================
+# If you prefer services over buttons, you can still use lambdas:
+#
+# api:
+#   services:
+#     - service: enroll_fingerprint
+#       variables:
+#         finger_id: int
+#         finger_name: string
+#       then:
+#         - lambda: |-
+#             id(fp_doorbell).start_enrollment(finger_id, finger_name);

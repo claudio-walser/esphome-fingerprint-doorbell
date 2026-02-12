@@ -120,33 +120,71 @@ Same as the original project:
   - `on` when any finger is on the sensor
   - `off` when no finger present
 
-## 🛠️ Services
+## 🛠️ Services & Actions
 
-All services are available in Home Assistant Developer Tools → Services:
+This component provides two ways to manage fingerprints:
 
-### `esphome.{device_name}_enroll_fingerprint`
+1. **Home Assistant Actions** - Use in automations with `action:` blocks
+2. **REST API** - Direct HTTP calls for standalone use
+
+### Home Assistant Actions
+
+All actions are available in your ESPHome device's YAML or Home Assistant automations:
+
+#### `fingerprint_doorbell.enroll`
 Enroll a new fingerprint.
 
 **Parameters:**
 - `finger_id` (int): ID 1-200
-- `finger_name` (string): Name for this fingerprint
+- `name` (string): Name for this fingerprint
 
-**Example:**
+**Example in automation:**
 ```yaml
-service: esphome.fingerprint_doorbell_front_enroll_fingerprint
-data:
-  finger_id: 1
-  finger_name: "John"
+automation:
+  - alias: "Enroll New Finger"
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: ENROLL_FINGER
+    action:
+      - action: fingerprint_doorbell.enroll
+        data:
+          finger_id: 1
+          name: "John"
+```
+
+**Example in ESPHome button:**
+```yaml
+button:
+  - platform: template
+    name: "Enroll John"
+    on_press:
+      - fingerprint_doorbell.enroll:
+          finger_id: 1
+          name: "John"
 ```
 
 **Process:**
-1. Call the service
+1. Call the action
 2. Place finger on sensor when LED flashes purple
 3. Remove finger when LED turns solid purple
 4. Repeat 5 times total
 5. Enrollment complete!
 
-### `esphome.{device_name}_delete_fingerprint`
+#### `fingerprint_doorbell.cancel_enroll`
+Cancel an in-progress enrollment.
+
+**Example:**
+```yaml
+button:
+  - platform: template
+    name: "Cancel Enrollment"
+    on_press:
+      - fingerprint_doorbell.cancel_enroll
+```
+
+#### `fingerprint_doorbell.delete`
 Delete a single fingerprint.
 
 **Parameters:**
@@ -154,46 +192,187 @@ Delete a single fingerprint.
 
 **Example:**
 ```yaml
-service: esphome.fingerprint_doorbell_front_delete_fingerprint
-data:
-  finger_id: 1
+button:
+  - platform: template
+    name: "Delete Finger 1"
+    on_press:
+      - fingerprint_doorbell.delete:
+          finger_id: 1
 ```
 
-### `esphome.{device_name}_delete_all_fingerprints`
+#### `fingerprint_doorbell.delete_all`
 Delete all enrolled fingerprints.
 
 **Example:**
 ```yaml
-service: esphome.fingerprint_doorbell_front_delete_all_fingerprints
+button:
+  - platform: template
+    name: "Delete All"
+    on_press:
+      - fingerprint_doorbell.delete_all
 ```
 
-### `esphome.{device_name}_rename_fingerprint`
+#### `fingerprint_doorbell.rename`
 Rename an existing fingerprint.
 
 **Parameters:**
 - `finger_id` (int): ID to rename
-- `new_name` (string): New name
+- `name` (string): New name
 
 **Example:**
 ```yaml
-service: esphome.fingerprint_doorbell_front_rename_fingerprint
-data:
-  finger_id: 1
-  new_name: "John Smith"
+button:
+  - platform: template
+    name: "Rename Finger 1"
+    on_press:
+      - fingerprint_doorbell.rename:
+          finger_id: 1
+          name: "John Smith"
 ```
 
-### `esphome.{device_name}_set_ignore_touch_ring`
-Enable/disable touch ring (for rain protection).
+---
+
+### REST API Endpoints
+
+The component exposes a REST API at `/fingerprint/*` for standalone device management without Home Assistant.
+
+**Base URL:** `http://<device-ip>/fingerprint/`
+
+#### `GET /fingerprint/list`
+Get list of all enrolled fingerprints.
+
+**Example:**
+```bash
+curl http://192.168.1.100/fingerprint/list
+```
+
+**Response:**
+```json
+[
+  {"id": 1, "name": "John"},
+  {"id": 2, "name": "Jane"}
+]
+```
+
+#### `GET /fingerprint/status`
+Get current sensor status.
+
+**Example:**
+```bash
+curl http://192.168.1.100/fingerprint/status
+```
+
+**Response:**
+```json
+{
+  "connected": true,
+  "enrolling": false,
+  "count": 2
+}
+```
+
+#### `POST /fingerprint/enroll?id=X&name=Y`
+Start fingerprint enrollment.
 
 **Parameters:**
-- `state` (bool): `true` to ignore, `false` to enable
+- `id` (int): Fingerprint ID (1-200)
+- `name` (string): Name for fingerprint
 
 **Example:**
-```yaml
-service: esphome.fingerprint_doorbell_front_set_ignore_touch_ring
-data:
-  state: true
+```bash
+curl -X POST "http://192.168.1.100/fingerprint/enroll?id=3&name=Alice"
 ```
+
+**Response:**
+```json
+{"status": "enrollment_started", "id": 3, "name": "Alice"}
+```
+
+After calling, place finger on sensor 5 times (LED guides you).
+
+#### `POST /fingerprint/cancel`
+Cancel in-progress enrollment.
+
+**Example:**
+```bash
+curl -X POST http://192.168.1.100/fingerprint/cancel
+```
+
+**Response:**
+```json
+{"status": "cancelled"}
+```
+
+#### `POST /fingerprint/delete?id=X`
+Delete a fingerprint.
+
+**Parameters:**
+- `id` (int): Fingerprint ID to delete
+
+**Example:**
+```bash
+curl -X POST "http://192.168.1.100/fingerprint/delete?id=1"
+```
+
+**Response:**
+```json
+{"status": "deleted", "id": 1}
+```
+
+#### `POST /fingerprint/delete_all`
+Delete all fingerprints.
+
+**Example:**
+```bash
+curl -X POST http://192.168.1.100/fingerprint/delete_all
+```
+
+**Response:**
+```json
+{"status": "all_deleted"}
+```
+
+#### `POST /fingerprint/rename?id=X&name=Y`
+Rename a fingerprint.
+
+**Parameters:**
+- `id` (int): Fingerprint ID
+- `name` (string): New name
+
+**Example:**
+```bash
+curl -X POST "http://192.168.1.100/fingerprint/rename?id=1&name=John%20Smith"
+```
+
+**Response:**
+```json
+{"status": "renamed", "id": 1, "name": "John Smith"}
+```
+
+---
+
+### Additional Text Sensors
+
+To monitor enrollment progress, add these text sensors:
+
+```yaml
+text_sensor:
+  - platform: fingerprint_doorbell
+    enroll_status:
+      name: "Enrollment Status"
+    last_action:
+      name: "Last Action"
+```
+
+**Enrollment Status Values:**
+- `Place finger (1/5)` through `Place finger (5/5)`
+- `Remove finger`
+- `Creating model...`
+- `Storing...`
+- `Success!`
+- `Error: ...` (various error messages)
+- `Timeout`
+- `Cancelled`
 
 ## 🎨 LED Ring Indicators
 

@@ -33,6 +33,10 @@ void FingerprintDoorbell::setup() {
   
   ESP_LOGI(TAG, "Using Serial2 with default pins (RX=GPIO16, TX=GPIO17)");
   this->sensor_connected_ = false;
+  this->mode_ = Mode::SCAN;
+  
+  // Setup REST API
+  this->setup_web_server();
 }
 
 void FingerprintDoorbell::loop() {
@@ -46,12 +50,19 @@ void FingerprintDoorbell::loop() {
         ESP_LOGI(TAG, "Fingerprint sensor connected successfully");
         this->load_fingerprint_names();
         this->set_led_ring_ready();
+        this->publish_last_action("Sensor connected");
       }
     }
     return;
   }
 
-  // Scan for fingerprints
+  // Handle different modes
+  if (this->mode_ == Mode::ENROLL) {
+    this->process_enrollment();
+    return;
+  }
+
+  // Normal scan mode
   Match match = this->scan_fingerprint();
 
   // Handle match found
@@ -66,6 +77,7 @@ void FingerprintDoorbell::loop() {
     if (this->match_name_sensor_ != nullptr)
       this->match_name_sensor_->publish_state(match.match_name);
     
+    this->publish_last_action("Match: " + match.match_name);
     this->last_match_time_ = millis();
     this->last_match_id_ = match.match_id;
     
@@ -88,6 +100,7 @@ void FingerprintDoorbell::loop() {
     if (this->doorbell_pin_ != nullptr)
       this->doorbell_pin_->digital_write(true);
     
+    this->publish_last_action("Doorbell ring");
     this->last_ring_time_ = millis();
     
     // Clear after 1 second
@@ -305,6 +318,235 @@ Match FingerprintDoorbell::scan_fingerprint() {
   return match;
 }
 
+// ==================== ENROLLMENT ====================
+
+void FingerprintDoorbell::start_enrollment(uint16_t id, const std::string &name) {
+  if (!this->sensor_connected_) {
+    ESP_LOGW(TAG, "Cannot enroll: sensor not connected");
+    this->publish_enroll_status("Error: Sensor not connected");
+    this->publish_last_action("Enroll failed: no sensor");
+    return;
+  }
+  
+  if (id < 1 || id > 200) {
+    ESP_LOGW(TAG, "Invalid ID %d (must be 1-200)", id);
+    this->publish_enroll_status("Error: Invalid ID (1-200)");
+    this->publish_last_action("Enroll failed: invalid ID");
+    return;
+  }
+  
+  ESP_LOGI(TAG, "Starting enrollment for ID %d, name: %s", id, name.c_str());
+  
+  this->mode_ = Mode::ENROLL;
+  this->enroll_step_ = EnrollStep::WAITING_FOR_FINGER;
+  this->enroll_id_ = id;
+  this->enroll_name_ = name;
+  this->enroll_sample_ = 1;
+  this->enroll_timeout_ = millis() + 60000;  // 60 second timeout
+  
+  this->set_led_ring_enroll();
+  this->publish_enroll_status("Place finger (1/5)");
+  this->publish_last_action("Enrollment started for ID " + std::to_string(id));
+}
+
+void FingerprintDoorbell::cancel_enrollment() {
+  if (this->mode_ != Mode::ENROLL) {
+    return;
+  }
+  
+  ESP_LOGI(TAG, "Enrollment cancelled");
+  this->mode_ = Mode::SCAN;
+  this->enroll_step_ = EnrollStep::IDLE;
+  this->set_led_ring_ready();
+  this->publish_enroll_status("Cancelled");
+  this->publish_last_action("Enrollment cancelled");
+}
+
+void FingerprintDoorbell::process_enrollment() {
+  // Check timeout
+  if (millis() > this->enroll_timeout_) {
+    ESP_LOGW(TAG, "Enrollment timeout");
+    this->mode_ = Mode::SCAN;
+    this->enroll_step_ = EnrollStep::IDLE;
+    this->set_led_ring_ready();
+    this->publish_enroll_status("Timeout");
+    this->publish_last_action("Enrollment timeout");
+    return;
+  }
+
+  uint8_t result;
+  
+  switch (this->enroll_step_) {
+    case EnrollStep::WAITING_FOR_FINGER:
+      result = this->finger_->getImage();
+      if (result == FINGERPRINT_OK) {
+        ESP_LOGI(TAG, "Image captured for sample %d", this->enroll_sample_);
+        this->enroll_step_ = EnrollStep::CONVERTING;
+      } else if (result != FINGERPRINT_NOFINGER) {
+        ESP_LOGW(TAG, "Error capturing image: %d", result);
+      }
+      break;
+      
+    case EnrollStep::CONVERTING:
+      result = this->finger_->image2Tz(this->enroll_sample_);
+      if (result == FINGERPRINT_OK) {
+        ESP_LOGI(TAG, "Image converted for sample %d", this->enroll_sample_);
+        this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE);
+        
+        if (this->enroll_sample_ >= 5) {
+          // All 5 samples collected, create model
+          this->enroll_step_ = EnrollStep::CREATING_MODEL;
+          this->publish_enroll_status("Creating model...");
+        } else {
+          // Need more samples
+          this->enroll_step_ = EnrollStep::WAITING_REMOVE;
+          this->publish_enroll_status("Remove finger");
+        }
+      } else {
+        ESP_LOGW(TAG, "Error converting image: %d", result);
+        this->publish_enroll_status("Error, try again");
+        this->enroll_step_ = EnrollStep::WAITING_FOR_FINGER;
+        this->set_led_ring_enroll();
+      }
+      break;
+      
+    case EnrollStep::WAITING_REMOVE:
+      result = this->finger_->getImage();
+      if (result == FINGERPRINT_NOFINGER) {
+        this->enroll_sample_++;
+        ESP_LOGI(TAG, "Ready for sample %d", this->enroll_sample_);
+        this->enroll_step_ = EnrollStep::WAITING_FOR_FINGER;
+        this->set_led_ring_enroll();
+        this->publish_enroll_status("Place finger (" + std::to_string(this->enroll_sample_) + "/5)");
+      }
+      break;
+      
+    case EnrollStep::CREATING_MODEL:
+      result = this->finger_->createModel();
+      if (result == FINGERPRINT_OK) {
+        ESP_LOGI(TAG, "Model created successfully");
+        this->enroll_step_ = EnrollStep::STORING;
+        this->publish_enroll_status("Storing...");
+      } else if (result == FINGERPRINT_ENROLLMISMATCH) {
+        ESP_LOGW(TAG, "Fingerprints did not match");
+        this->mode_ = Mode::SCAN;
+        this->enroll_step_ = EnrollStep::IDLE;
+        this->set_led_ring_error();
+        this->publish_enroll_status("Error: prints don't match");
+        this->publish_last_action("Enrollment failed: mismatch");
+        this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
+      } else {
+        ESP_LOGW(TAG, "Error creating model: %d", result);
+        this->mode_ = Mode::SCAN;
+        this->enroll_step_ = EnrollStep::IDLE;
+        this->set_led_ring_error();
+        this->publish_enroll_status("Error creating model");
+        this->publish_last_action("Enrollment failed");
+        this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
+      }
+      break;
+      
+    case EnrollStep::STORING:
+      result = this->finger_->storeModel(this->enroll_id_);
+      if (result == FINGERPRINT_OK) {
+        ESP_LOGI(TAG, "Fingerprint stored at ID %d", this->enroll_id_);
+        this->save_fingerprint_name(this->enroll_id_, this->enroll_name_);
+        this->finger_->getTemplateCount();
+        
+        this->mode_ = Mode::SCAN;
+        this->enroll_step_ = EnrollStep::IDLE;
+        this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE);
+        this->publish_enroll_status("Success!");
+        this->publish_last_action("Enrolled: " + this->enroll_name_ + " (ID " + std::to_string(this->enroll_id_) + ")");
+        this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
+      } else {
+        ESP_LOGW(TAG, "Error storing model: %d", result);
+        this->mode_ = Mode::SCAN;
+        this->enroll_step_ = EnrollStep::IDLE;
+        this->set_led_ring_error();
+        this->publish_enroll_status("Error storing");
+        this->publish_last_action("Enrollment failed: storage error");
+        this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
+      }
+      break;
+      
+    default:
+      break;
+  }
+}
+
+// ==================== DELETE / RENAME ====================
+
+bool FingerprintDoorbell::delete_fingerprint(uint16_t id) {
+  if (!this->sensor_connected_ || this->finger_ == nullptr) {
+    this->publish_last_action("Delete failed: no sensor");
+    return false;
+  }
+  
+  if (this->finger_->deleteModel(id) == FINGERPRINT_OK) {
+    std::string name = this->get_fingerprint_name(id);
+    this->delete_fingerprint_name(id);
+    this->finger_->getTemplateCount();
+    ESP_LOGI(TAG, "Deleted fingerprint ID %d", id);
+    this->publish_last_action("Deleted: " + name + " (ID " + std::to_string(id) + ")");
+    return true;
+  }
+  this->publish_last_action("Delete failed for ID " + std::to_string(id));
+  return false;
+}
+
+bool FingerprintDoorbell::delete_all_fingerprints() {
+  if (!this->sensor_connected_ || this->finger_ == nullptr) {
+    this->publish_last_action("Delete all failed: no sensor");
+    return false;
+  }
+  
+  if (this->finger_->emptyDatabase() == FINGERPRINT_OK) {
+    // Clear all saved names
+    for (auto const& pair : this->fingerprint_names_) {
+      this->delete_fingerprint_name(pair.first);
+    }
+    this->fingerprint_names_.clear();
+    this->finger_->getTemplateCount();
+    ESP_LOGI(TAG, "Deleted all fingerprints");
+    this->publish_last_action("Deleted all fingerprints");
+    return true;
+  }
+  this->publish_last_action("Delete all failed");
+  return false;
+}
+
+bool FingerprintDoorbell::rename_fingerprint(uint16_t id, const std::string &new_name) {
+  std::string old_name = this->get_fingerprint_name(id);
+  this->save_fingerprint_name(id, new_name);
+  ESP_LOGI(TAG, "Renamed ID %d from '%s' to '%s'", id, old_name.c_str(), new_name.c_str());
+  this->publish_last_action("Renamed ID " + std::to_string(id) + " to " + new_name);
+  return true;
+}
+
+// ==================== UTILITIES ====================
+
+uint16_t FingerprintDoorbell::get_enrolled_count() {
+  return this->finger_ != nullptr ? this->finger_->templateCount : 0;
+}
+
+std::string FingerprintDoorbell::get_fingerprint_name(uint16_t id) {
+  auto it = this->fingerprint_names_.find(id);
+  return (it != this->fingerprint_names_.end()) ? it->second : "unknown";
+}
+
+std::string FingerprintDoorbell::get_fingerprint_list_json() {
+  std::string json = "[";
+  bool first = true;
+  for (auto const& pair : this->fingerprint_names_) {
+    if (!first) json += ",";
+    json += "{\"id\":" + std::to_string(pair.first) + ",\"name\":\"" + pair.second + "\"}";
+    first = false;
+  }
+  json += "]";
+  return json;
+}
+
 void FingerprintDoorbell::update_touch_state(bool touched) {
   if ((touched != this->last_touch_state_) || (this->ignore_touch_ring_ != this->last_ignore_touch_ring_)) {
     if (touched) {
@@ -338,6 +580,11 @@ void FingerprintDoorbell::set_led_ring_ready() {
 void FingerprintDoorbell::set_led_ring_error() {
   if (this->finger_ != nullptr)
     this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_RED, 0);
+}
+
+void FingerprintDoorbell::set_led_ring_enroll() {
+  if (this->finger_ != nullptr)
+    this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_PURPLE, 0);
 }
 
 void FingerprintDoorbell::load_fingerprint_names() {
@@ -381,49 +628,138 @@ void FingerprintDoorbell::delete_fingerprint_name(uint16_t id) {
   this->fingerprint_names_.erase(id);
 }
 
-bool FingerprintDoorbell::enroll_fingerprint(uint16_t id, const std::string &name) {
-  // TODO: Implement enrollment
-  ESP_LOGW(TAG, "Enrollment not yet implemented");
-  return false;
-}
-
-bool FingerprintDoorbell::delete_fingerprint(uint16_t id) {
-  if (!this->sensor_connected_ || this->finger_ == nullptr)
-    return false;
-  
-  if (this->finger_->deleteModel(id) == FINGERPRINT_OK) {
-    this->delete_fingerprint_name(id);
-    ESP_LOGI(TAG, "Deleted fingerprint ID %d", id);
-    return true;
+void FingerprintDoorbell::publish_enroll_status(const std::string &status) {
+  ESP_LOGI(TAG, "Enroll status: %s", status.c_str());
+  if (this->enroll_status_sensor_ != nullptr) {
+    this->enroll_status_sensor_->publish_state(status);
   }
-  return false;
 }
 
-bool FingerprintDoorbell::delete_all_fingerprints() {
-  if (!this->sensor_connected_ || this->finger_ == nullptr)
-    return false;
-  
-  if (this->finger_->emptyDatabase() == FINGERPRINT_OK) {
-    this->fingerprint_names_.clear();
-    ESP_LOGI(TAG, "Deleted all fingerprints");
-    return true;
+void FingerprintDoorbell::publish_last_action(const std::string &action) {
+  ESP_LOGI(TAG, "Action: %s", action.c_str());
+  if (this->last_action_sensor_ != nullptr) {
+    this->last_action_sensor_->publish_state(action);
   }
-  return false;
 }
 
-bool FingerprintDoorbell::rename_fingerprint(uint16_t id, const std::string &new_name) {
-  this->save_fingerprint_name(id, new_name);
-  ESP_LOGI(TAG, "Renamed ID %d to '%s'", id, new_name.c_str());
-  return true;
-}
+// ==================== REST API ====================
 
-uint16_t FingerprintDoorbell::get_enrolled_count() {
-  return this->finger_ != nullptr ? this->finger_->templateCount : 0;
-}
+class FingerprintRequestHandler : public AsyncWebHandler {
+ public:
+  FingerprintRequestHandler(FingerprintDoorbell *parent) : parent_(parent) {}
+  
+  bool canHandle(AsyncWebServerRequest *request) override {
+    if (request->url().startsWith("/fingerprint/"))
+      return true;
+    return false;
+  }
+  
+  void handleRequest(AsyncWebServerRequest *request) override {
+    String url = request->url();
+    
+    // GET /fingerprint/list - Get list of enrolled fingerprints
+    if (url == "/fingerprint/list" && request->method() == HTTP_GET) {
+      std::string json = this->parent_->get_fingerprint_list_json();
+      request->send(200, "application/json", json.c_str());
+      return;
+    }
+    
+    // GET /fingerprint/status - Get current status
+    if (url == "/fingerprint/status" && request->method() == HTTP_GET) {
+      std::string json = "{";
+      json += "\"connected\":" + std::string(this->parent_->is_sensor_connected() ? "true" : "false");
+      json += ",\"enrolling\":" + std::string(this->parent_->is_enrolling() ? "true" : "false");
+      json += ",\"count\":" + std::to_string(this->parent_->get_enrolled_count());
+      json += "}";
+      request->send(200, "application/json", json.c_str());
+      return;
+    }
+    
+    // POST /fingerprint/enroll?id=X&name=Y - Start enrollment
+    if (url == "/fingerprint/enroll" && request->method() == HTTP_POST) {
+      if (!request->hasParam("id") || !request->hasParam("name")) {
+        request->send(400, "application/json", "{\"error\":\"Missing id or name parameter\"}");
+        return;
+      }
+      uint16_t id = request->getParam("id")->value().toInt();
+      String name = request->getParam("name")->value();
+      
+      if (id < 1 || id > 200) {
+        request->send(400, "application/json", "{\"error\":\"ID must be 1-200\"}");
+        return;
+      }
+      
+      this->parent_->start_enrollment(id, name.c_str());
+      request->send(200, "application/json", "{\"status\":\"enrollment_started\",\"id\":" + String(id) + ",\"name\":\"" + name + "\"}");
+      return;
+    }
+    
+    // POST /fingerprint/cancel - Cancel enrollment
+    if (url == "/fingerprint/cancel" && request->method() == HTTP_POST) {
+      this->parent_->cancel_enrollment();
+      request->send(200, "application/json", "{\"status\":\"cancelled\"}");
+      return;
+    }
+    
+    // POST /fingerprint/delete?id=X - Delete fingerprint
+    if (url == "/fingerprint/delete" && request->method() == HTTP_POST) {
+      if (!request->hasParam("id")) {
+        request->send(400, "application/json", "{\"error\":\"Missing id parameter\"}");
+        return;
+      }
+      uint16_t id = request->getParam("id")->value().toInt();
+      
+      if (this->parent_->delete_fingerprint(id)) {
+        request->send(200, "application/json", "{\"status\":\"deleted\",\"id\":" + String(id) + "}");
+      } else {
+        request->send(500, "application/json", "{\"error\":\"Delete failed\"}");
+      }
+      return;
+    }
+    
+    // POST /fingerprint/delete_all - Delete all fingerprints
+    if (url == "/fingerprint/delete_all" && request->method() == HTTP_POST) {
+      if (this->parent_->delete_all_fingerprints()) {
+        request->send(200, "application/json", "{\"status\":\"all_deleted\"}");
+      } else {
+        request->send(500, "application/json", "{\"error\":\"Delete all failed\"}");
+      }
+      return;
+    }
+    
+    // POST /fingerprint/rename?id=X&name=Y - Rename fingerprint
+    if (url == "/fingerprint/rename" && request->method() == HTTP_POST) {
+      if (!request->hasParam("id") || !request->hasParam("name")) {
+        request->send(400, "application/json", "{\"error\":\"Missing id or name parameter\"}");
+        return;
+      }
+      uint16_t id = request->getParam("id")->value().toInt();
+      String name = request->getParam("name")->value();
+      
+      if (this->parent_->rename_fingerprint(id, name.c_str())) {
+        request->send(200, "application/json", "{\"status\":\"renamed\",\"id\":" + String(id) + ",\"name\":\"" + name + "\"}");
+      } else {
+        request->send(500, "application/json", "{\"error\":\"Rename failed\"}");
+      }
+      return;
+    }
+    
+    request->send(404, "application/json", "{\"error\":\"Unknown endpoint\"}");
+  }
+  
+ protected:
+  FingerprintDoorbell *parent_;
+};
 
-std::string FingerprintDoorbell::get_fingerprint_name(uint16_t id) {
-  auto it = this->fingerprint_names_.find(id);
-  return (it != this->fingerprint_names_.end()) ? it->second : "unknown";
+void FingerprintDoorbell::setup_web_server() {
+  auto *base = web_server_base::global_web_server_base;
+  if (base == nullptr) {
+    ESP_LOGW(TAG, "WebServerBase not found, REST API disabled");
+    return;
+  }
+  
+  base->add_handler(new FingerprintRequestHandler(this));
+  ESP_LOGI(TAG, "REST API registered at /fingerprint/*");
 }
 
 }  // namespace fingerprint_doorbell
