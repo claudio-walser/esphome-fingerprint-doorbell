@@ -538,11 +538,22 @@ std::string FingerprintDoorbell::get_fingerprint_name(uint16_t id) {
 std::string FingerprintDoorbell::get_fingerprint_list_json() {
   std::string json = "[";
   bool first = true;
-  for (auto const& pair : this->fingerprint_names_) {
-    if (!first) json += ",";
-    json += "{\"id\":" + std::to_string(pair.first) + ",\"name\":\"" + pair.second + "\"}";
-    first = false;
+  
+  if (this->finger_ == nullptr || !this->sensor_connected_) {
+    return "[]";
   }
+  
+  // Scan all slots to find enrolled fingerprints
+  uint16_t capacity = this->finger_->capacity > 0 ? this->finger_->capacity : 200;
+  for (uint16_t id = 1; id <= capacity; id++) {
+    if (this->finger_->loadModel(id) == FINGERPRINT_OK) {
+      if (!first) json += ",";
+      std::string name = this->get_fingerprint_name(id);
+      json += "{\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
+      first = false;
+    }
+  }
+  
   json += "]";
   return json;
 }
