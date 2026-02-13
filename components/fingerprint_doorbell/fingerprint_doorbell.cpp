@@ -66,6 +66,11 @@ void FingerprintDoorbell::loop() {
   if (this->last_ring_time_ > 0 && millis() - this->last_ring_time_ < 1000) {
     return;
   }
+  
+  // Cooldown after match to keep LED visible
+  if (this->last_match_time_ > 0 && millis() - this->last_match_time_ < 1000) {
+    return;
+  }
 
   // Normal scan mode
   Match match = this->scan_fingerprint();
