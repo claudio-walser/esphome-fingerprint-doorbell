@@ -226,6 +226,8 @@ Match FingerprintDoorbell::scan_fingerprint() {
       
       switch (match.return_code) {
         case FINGERPRINT_OK:
+          // Finger detected and image captured - show scanning LED
+          this->set_led_ring_scanning();
           break;
           
         case FINGERPRINT_NOFINGER:
