@@ -735,9 +735,13 @@ class FingerprintRequestHandler : public AsyncWebHandler {
   }
 
   void handleRequest(AsyncWebServerRequest *request) override {
-    // Handle CORS preflight - let framework add headers, just return success
+    // Handle CORS preflight
     if (request->method() == HTTP_OPTIONS) {
-      request->send(200);
+      auto *response = request->beginResponse(200, "text/plain", "");
+      response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      response->addHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      response->addHeader("Access-Control-Max-Age", "86400");
+      request->send(response);
       return;
     }
 
