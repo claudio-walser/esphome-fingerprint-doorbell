@@ -48,31 +48,32 @@ fingerprint_doorbell:
   led_ready_color: blue
   led_ready_mode: "on"
   led_ready_speed: 0
-  
-  # Error state
-  led_error_color: red
-  led_error_mode: "on"
-  led_error_speed: 0
-  
-  # Enrollment state (waiting for finger during enrollment)
-  led_enroll_color: purple
-  led_enroll_mode: flashing
-  led_enroll_speed: 25
-  
+
+  # Scanning state (finger detected, scanning in progress)
+  led_scanning_color: blue
+  led_scanning_mode: flashing
+  led_scanning_speed: 25
+
   # Match state (fingerprint matched or enrollment pass complete)
   led_match_color: purple
   led_match_mode: "on"
   led_match_speed: 0
   
-  # Scanning state (finger detected, scanning in progress)
-  led_scanning_color: blue
-  led_scanning_mode: flashing
-  led_scanning_speed: 25
-  
   # No match state (fingerprint not recognized, doorbell ring)
   led_no_match_color: red
-  led_no_match_mode: flashing
-  led_no_match_speed: 25
+  led_no_match_mode: "on"
+  led_no_match_speed: 0
+
+  # Error state
+  led_error_color: red
+  led_error_mode: flashing
+  led_error_speed: 25
+  
+  # Enrollment state (waiting for finger during enrollment)
+  led_enroll_color: purple
+  led_enroll_mode: flashing
+  led_enroll_speed: 25
+
 
 # Sensors
 sensor:
