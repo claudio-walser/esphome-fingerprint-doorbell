@@ -27,6 +27,9 @@ CONF_LED_MATCH_SPEED = "led_match_speed"
 CONF_LED_SCANNING_COLOR = "led_scanning_color"
 CONF_LED_SCANNING_MODE = "led_scanning_mode"
 CONF_LED_SCANNING_SPEED = "led_scanning_speed"
+CONF_LED_NO_MATCH_COLOR = "led_no_match_color"
+CONF_LED_NO_MATCH_MODE = "led_no_match_mode"
+CONF_LED_NO_MATCH_SPEED = "led_no_match_speed"
 
 # LED color enum values (matching Adafruit library)
 LED_COLORS = {
@@ -84,6 +87,10 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_LED_SCANNING_COLOR): cv.one_of(*LED_COLORS, lower=True),
         cv.Optional(CONF_LED_SCANNING_MODE): cv.one_of(*LED_MODES, lower=True),
         cv.Optional(CONF_LED_SCANNING_SPEED): cv.int_range(min=0, max=255),
+        # LED No Match state (fingerprint not recognized)
+        cv.Optional(CONF_LED_NO_MATCH_COLOR): cv.one_of(*LED_COLORS, lower=True),
+        cv.Optional(CONF_LED_NO_MATCH_MODE): cv.one_of(*LED_MODES, lower=True),
+        cv.Optional(CONF_LED_NO_MATCH_SPEED): cv.int_range(min=0, max=255),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -233,4 +240,12 @@ async def to_code(config):
             LED_COLORS.get(config.get(CONF_LED_SCANNING_COLOR), 2),  # default blue
             LED_MODES.get(config.get(CONF_LED_SCANNING_MODE), 2),    # default flashing
             config.get(CONF_LED_SCANNING_SPEED, 25)
+        ))
+
+    # LED No Match configuration (only if any value specified)
+    if CONF_LED_NO_MATCH_COLOR in config or CONF_LED_NO_MATCH_MODE in config or CONF_LED_NO_MATCH_SPEED in config:
+        cg.add(var.set_led_no_match(
+            LED_COLORS.get(config.get(CONF_LED_NO_MATCH_COLOR), 1),  # default red
+            LED_MODES.get(config.get(CONF_LED_NO_MATCH_MODE), 2),    # default flashing
+            config.get(CONF_LED_NO_MATCH_SPEED, 25)
         ))

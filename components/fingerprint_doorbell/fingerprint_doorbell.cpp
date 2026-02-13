@@ -95,6 +95,9 @@ void FingerprintDoorbell::loop() {
   else if (match.scan_result == ScanResult::NO_MATCH_FOUND) {
     ESP_LOGI(TAG, "No match - doorbell ring!");
     
+    // Show no match LED
+    this->set_led_ring_no_match();
+    
     if (this->ring_sensor_ != nullptr)
       this->ring_sensor_->publish_state(true);
     if (this->doorbell_pin_ != nullptr)
@@ -109,6 +112,8 @@ void FingerprintDoorbell::loop() {
         this->ring_sensor_->publish_state(false);
       if (this->doorbell_pin_ != nullptr)
         this->doorbell_pin_->digital_write(false);
+      // Return to ready state
+      this->set_led_ring_ready();
     });
   }
 
@@ -132,6 +137,7 @@ void FingerprintDoorbell::dump_config() {
   ESP_LOGCONFIG(TAG, "  LED Enroll: color=%d, mode=%d, speed=%d", this->led_enroll_.color, this->led_enroll_.mode, this->led_enroll_.speed);
   ESP_LOGCONFIG(TAG, "  LED Match: color=%d, mode=%d, speed=%d", this->led_match_.color, this->led_match_.mode, this->led_match_.speed);
   ESP_LOGCONFIG(TAG, "  LED Scanning: color=%d, mode=%d, speed=%d", this->led_scanning_.color, this->led_scanning_.mode, this->led_scanning_.speed);
+  ESP_LOGCONFIG(TAG, "  LED No Match: color=%d, mode=%d, speed=%d", this->led_no_match_.color, this->led_no_match_.mode, this->led_no_match_.speed);
   
   if (this->sensor_connected_ && this->finger_ != nullptr) {
     ESP_LOGCONFIG(TAG, "  Sensor Capacity: %d", this->finger_->capacity);
@@ -618,6 +624,12 @@ void FingerprintDoorbell::set_led_ring_scanning() {
   ESP_LOGD(TAG, "LED scanning: color=%d, mode=%d, speed=%d", this->led_scanning_.color, this->led_scanning_.mode, this->led_scanning_.speed);
   if (this->finger_ != nullptr)
     this->finger_->LEDcontrol(this->led_scanning_.mode, this->led_scanning_.speed, this->led_scanning_.color, 0);
+}
+
+void FingerprintDoorbell::set_led_ring_no_match() {
+  ESP_LOGD(TAG, "LED no_match: color=%d, mode=%d, speed=%d", this->led_no_match_.color, this->led_no_match_.mode, this->led_no_match_.speed);
+  if (this->finger_ != nullptr)
+    this->finger_->LEDcontrol(this->led_no_match_.mode, this->led_no_match_.speed, this->led_no_match_.color, 0);
 }
 
 void FingerprintDoorbell::load_fingerprint_names() {

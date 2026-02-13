@@ -68,6 +68,11 @@ fingerprint_doorbell:
   led_scanning_color: blue
   led_scanning_mode: flashing
   led_scanning_speed: 25
+  
+  # No match state (fingerprint not recognized, doorbell ring)
+  led_no_match_color: red
+  led_no_match_mode: flashing
+  led_no_match_speed: 25
 
 # Sensors
 sensor:

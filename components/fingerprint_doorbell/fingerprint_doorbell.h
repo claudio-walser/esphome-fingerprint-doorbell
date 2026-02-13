@@ -62,6 +62,9 @@ class FingerprintDoorbell : public Component {
   void set_led_scanning(uint8_t color, uint8_t mode, uint8_t speed) {
     led_scanning_ = {color, mode, speed};
   }
+  void set_led_no_match(uint8_t color, uint8_t mode, uint8_t speed) {
+    led_no_match_ = {color, mode, speed};
+  }
 
   // Sensor setters
   void set_match_id_sensor(sensor::Sensor *sensor) { match_id_sensor_ = sensor; }
@@ -99,6 +102,7 @@ class FingerprintDoorbell : public Component {
   LedConfig led_enroll_{3, 2, 25};    // purple, flashing, speed 25
   LedConfig led_match_{3, 3, 0};      // purple, on, speed 0
   LedConfig led_scanning_{2, 2, 25};  // blue, flashing, speed 25
+  LedConfig led_no_match_{1, 2, 25};  // red, flashing, speed 25
 
   // Sensors
   sensor::Sensor *match_id_sensor_{nullptr};
@@ -141,6 +145,7 @@ class FingerprintDoorbell : public Component {
   void set_led_ring_enroll();
   void set_led_ring_match();
   void set_led_ring_scanning();
+  void set_led_ring_no_match();
   void load_fingerprint_names();
   void save_fingerprint_name(uint16_t id, const std::string &name);
   void delete_fingerprint_name(uint16_t id);
