@@ -602,11 +602,13 @@ void FingerprintDoorbell::set_led_ring_enroll() {
 }
 
 void FingerprintDoorbell::set_led_ring_match() {
+  ESP_LOGD(TAG, "LED match: color=%d, mode=%d, speed=%d", this->led_match_.color, this->led_match_.mode, this->led_match_.speed);
   if (this->finger_ != nullptr)
     this->finger_->LEDcontrol(this->led_match_.mode, this->led_match_.speed, this->led_match_.color, 0);
 }
 
 void FingerprintDoorbell::set_led_ring_scanning() {
+  ESP_LOGD(TAG, "LED scanning: color=%d, mode=%d, speed=%d", this->led_scanning_.color, this->led_scanning_.mode, this->led_scanning_.speed);
   if (this->finger_ != nullptr)
     this->finger_->LEDcontrol(this->led_scanning_.mode, this->led_scanning_.speed, this->led_scanning_.color, 0);
 }
