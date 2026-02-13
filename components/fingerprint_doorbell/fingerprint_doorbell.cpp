@@ -126,6 +126,13 @@ void FingerprintDoorbell::dump_config() {
   ESP_LOGCONFIG(TAG, "  Ignore Touch Ring: %s", YESNO(this->ignore_touch_ring_));
   ESP_LOGCONFIG(TAG, "  Sensor Connected: %s", YESNO(this->sensor_connected_));
   
+  // LED configuration debug
+  ESP_LOGCONFIG(TAG, "  LED Ready: color=%d, mode=%d, speed=%d", this->led_ready_.color, this->led_ready_.mode, this->led_ready_.speed);
+  ESP_LOGCONFIG(TAG, "  LED Error: color=%d, mode=%d, speed=%d", this->led_error_.color, this->led_error_.mode, this->led_error_.speed);
+  ESP_LOGCONFIG(TAG, "  LED Enroll: color=%d, mode=%d, speed=%d", this->led_enroll_.color, this->led_enroll_.mode, this->led_enroll_.speed);
+  ESP_LOGCONFIG(TAG, "  LED Match: color=%d, mode=%d, speed=%d", this->led_match_.color, this->led_match_.mode, this->led_match_.speed);
+  ESP_LOGCONFIG(TAG, "  LED Scanning: color=%d, mode=%d, speed=%d", this->led_scanning_.color, this->led_scanning_.mode, this->led_scanning_.speed);
+  
   if (this->sensor_connected_ && this->finger_ != nullptr) {
     ESP_LOGCONFIG(TAG, "  Sensor Capacity: %d", this->finger_->capacity);
     ESP_LOGCONFIG(TAG, "  Enrolled Templates: %d", this->finger_->templateCount);
