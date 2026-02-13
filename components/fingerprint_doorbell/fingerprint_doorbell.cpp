@@ -708,6 +708,8 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     return url.rfind("/fingerprint/", 0) == 0;  // starts_with equivalent
   }
   
+  bool isRequestHandlerTrivial() const override { return false; }
+  
   bool check_auth(AsyncWebServerRequest *request) const {
     std::string token = this->parent_->get_api_token();
     if (token.empty()) {
@@ -733,14 +735,9 @@ class FingerprintRequestHandler : public AsyncWebHandler {
   }
 
   void handleRequest(AsyncWebServerRequest *request) override {
-    // Handle CORS preflight
+    // Handle CORS preflight - let framework add headers, just return success
     if (request->method() == HTTP_OPTIONS) {
-      AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", "");
-      response->addHeader("Access-Control-Allow-Origin", "*");
-      response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-      response->addHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-      response->addHeader("Access-Control-Max-Age", "86400");
-      request->send(response);
+      request->send(200);
       return;
     }
 
