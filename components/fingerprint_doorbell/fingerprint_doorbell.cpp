@@ -735,7 +735,7 @@ class FingerprintRequestHandler : public AsyncWebHandler {
   void handleRequest(AsyncWebServerRequest *request) override {
     // Handle CORS preflight
     if (request->method() == HTTP_OPTIONS) {
-      AsyncWebServerResponse *response = request->beginResponse(204);
+      AsyncWebServerResponse *response = request->beginResponse(204, "text/plain", "");
       response->addHeader("Access-Control-Allow-Origin", "*");
       response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
       response->addHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
