@@ -81,7 +81,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_LED_MATCH_MODE, default="on"): cv.one_of(*LED_MODES, lower=True),
         cv.Optional(CONF_LED_MATCH_SPEED, default=0): cv.int_range(min=0, max=255),
         # LED Scanning state (finger detected, scanning)
-        cv.Optional(CONF_LED_SCANNING_COLOR, default="red"): cv.one_of(*LED_COLORS, lower=True),
+        cv.Optional(CONF_LED_SCANNING_COLOR, default="blue"): cv.one_of(*LED_COLORS, lower=True),
         cv.Optional(CONF_LED_SCANNING_MODE, default="flashing"): cv.one_of(*LED_MODES, lower=True),
         cv.Optional(CONF_LED_SCANNING_SPEED, default=25): cv.int_range(min=0, max=255),
     }
