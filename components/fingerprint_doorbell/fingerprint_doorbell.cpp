@@ -287,7 +287,7 @@ Match FingerprintDoorbell::scan_fingerprint() {
     
     if (match.return_code == FINGERPRINT_OK) {
       // Match found!
-      this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE);
+      this->set_led_ring_match();
       
       match.scan_result = ScanResult::MATCH_FOUND;
       match.match_id = this->finger_->fingerID;
@@ -391,7 +391,7 @@ void FingerprintDoorbell::process_enrollment() {
       result = this->finger_->image2Tz(this->enroll_sample_);
       if (result == FINGERPRINT_OK) {
         ESP_LOGI(TAG, "Image converted for sample %d", this->enroll_sample_);
-        this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE);
+        this->set_led_ring_match();  // Use match LED for successful enrollment pass
         
         if (this->enroll_sample_ >= 5) {
           // All 5 samples collected, create model
@@ -455,7 +455,7 @@ void FingerprintDoorbell::process_enrollment() {
         
         this->mode_ = Mode::SCAN;
         this->enroll_step_ = EnrollStep::IDLE;
-        this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE);
+        this->set_led_ring_match();  // Use match LED for successful enrollment
         this->publish_enroll_status("Success!");
         this->publish_last_action("Enrolled: " + this->enroll_name_ + " (ID " + std::to_string(this->enroll_id_) + ")");
         this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
@@ -561,7 +561,7 @@ std::string FingerprintDoorbell::get_fingerprint_list_json() {
 void FingerprintDoorbell::update_touch_state(bool touched) {
   if ((touched != this->last_touch_state_) || (this->ignore_touch_ring_ != this->last_ignore_touch_ring_)) {
     if (touched) {
-      this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_RED, 0);
+      this->set_led_ring_scanning();
     } else {
       this->set_led_ring_ready();
     }
@@ -582,20 +582,31 @@ void FingerprintDoorbell::set_led_ring_ready() {
     return;
   
   if (this->ignore_touch_ring_) {
-    this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_BLUE, 0);
+    // When touch ring is ignored, use solid "on" mode instead of breathing
+    this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, this->led_ready_.color, 0);
   } else {
-    this->finger_->LEDcontrol(FINGERPRINT_LED_BREATHING, 100, FINGERPRINT_LED_BLUE, 0);
+    this->finger_->LEDcontrol(this->led_ready_.mode, this->led_ready_.speed, this->led_ready_.color, 0);
   }
 }
 
 void FingerprintDoorbell::set_led_ring_error() {
   if (this->finger_ != nullptr)
-    this->finger_->LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_RED, 0);
+    this->finger_->LEDcontrol(this->led_error_.mode, this->led_error_.speed, this->led_error_.color, 0);
 }
 
 void FingerprintDoorbell::set_led_ring_enroll() {
   if (this->finger_ != nullptr)
-    this->finger_->LEDcontrol(FINGERPRINT_LED_FLASHING, 25, FINGERPRINT_LED_PURPLE, 0);
+    this->finger_->LEDcontrol(this->led_enroll_.mode, this->led_enroll_.speed, this->led_enroll_.color, 0);
+}
+
+void FingerprintDoorbell::set_led_ring_match() {
+  if (this->finger_ != nullptr)
+    this->finger_->LEDcontrol(this->led_match_.mode, this->led_match_.speed, this->led_match_.color, 0);
+}
+
+void FingerprintDoorbell::set_led_ring_scanning() {
+  if (this->finger_ != nullptr)
+    this->finger_->LEDcontrol(this->led_scanning_.mode, this->led_scanning_.speed, this->led_scanning_.color, 0);
 }
 
 void FingerprintDoorbell::load_fingerprint_names() {
