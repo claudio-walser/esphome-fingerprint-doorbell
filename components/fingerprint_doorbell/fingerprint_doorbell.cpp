@@ -65,11 +65,19 @@ void FingerprintDoorbell::loop() {
   // Cooldown after no-match to keep LED visible
   if (this->last_ring_time_ > 0 && millis() - this->last_ring_time_ < 1000) {
     return;
+  } else if (this->last_ring_time_ > 0) {
+    // Cooldown just expired, return to ready state
+    this->last_ring_time_ = 0;
+    this->set_led_ring_ready();
   }
   
   // Cooldown after match to keep LED visible
   if (this->last_match_time_ > 0 && millis() - this->last_match_time_ < 1000) {
     return;
+  } else if (this->last_match_time_ > 0) {
+    // Cooldown just expired, return to ready state
+    this->last_match_time_ = 0;
+    this->set_led_ring_ready();
   }
 
   // Normal scan mode
@@ -79,6 +87,9 @@ void FingerprintDoorbell::loop() {
   if (match.scan_result == ScanResult::MATCH_FOUND) {
     ESP_LOGI(TAG, "Match: ID=%d, Name=%s, Confidence=%d", 
              match.match_id, match.match_name.c_str(), match.match_confidence);
+    
+    // Set match LED here (after scan completes) to ensure it's visible
+    this->set_led_ring_match();
     
     if (this->match_id_sensor_ != nullptr)
       this->match_id_sensor_->publish_state(match.match_id);
@@ -116,14 +127,13 @@ void FingerprintDoorbell::loop() {
     this->publish_last_action("Doorbell ring");
     this->last_ring_time_ = millis();
     
-    // Clear after 1 second
+    // Clear doorbell output after 1 second
     this->set_timeout(1000, [this]() {
       if (this->ring_sensor_ != nullptr)
         this->ring_sensor_->publish_state(false);
       if (this->doorbell_pin_ != nullptr)
         this->doorbell_pin_->digital_write(false);
-      // Return to ready state
-      this->set_led_ring_ready();
+      // LED ready state is handled by cooldown logic in loop()
     });
   }
 
@@ -311,9 +321,7 @@ Match FingerprintDoorbell::scan_fingerprint() {
     match.return_code = this->finger_->fingerSearch();
     
     if (match.return_code == FINGERPRINT_OK) {
-      // Match found!
-      this->set_led_ring_match();
-      
+      // Match found - LED is set in loop() after scan returns
       match.scan_result = ScanResult::MATCH_FOUND;
       match.match_id = this->finger_->fingerID;
       match.match_confidence = this->finger_->confidence;
