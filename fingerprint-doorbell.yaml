@@ -13,7 +13,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/claudio-walser/esphome-fingerprint-doorbell
-      ref: main
+      ref: led-improvements
     components: [ fingerprint_doorbell ]
     refresh: 0s
 
@@ -46,12 +46,12 @@ fingerprint_doorbell:
   
   # Ready state (idle, waiting for finger)
   led_ready_color: blue
-  led_ready_mode: on
+  led_ready_mode: "on"
   led_ready_speed: 100
   
   # Error state
   led_error_color: red
-  led_error_mode: on
+  led_error_mode: "on"
   led_error_speed: 0
   
   # Enrollment state (waiting for finger during enrollment)
@@ -61,7 +61,7 @@ fingerprint_doorbell:
   
   # Match state (fingerprint matched or enrollment pass complete)
   led_match_color: purple
-  led_match_mode: on
+  led_match_mode: "on"
   led_match_speed: 0
   
   # Scanning state (finger detected, scanning in progress)
