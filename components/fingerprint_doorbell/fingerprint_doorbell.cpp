@@ -728,7 +728,7 @@ class FingerprintRequestHandler : public AsyncWebHandler {
   
   void send_cors_response(AsyncWebServerRequest *request, int code, const char *content_type, const std::string &body) {
     AsyncWebServerResponse *response = request->beginResponse(code, content_type, body.c_str());
-    response->addHeader("Access-Control-Allow-Origin", "*");
+    // Note: Access-Control-Allow-Origin is added by ESPHome's web_server component
     response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     response->addHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     request->send(response);
