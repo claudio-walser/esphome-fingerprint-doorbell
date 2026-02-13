@@ -47,7 +47,7 @@ fingerprint_doorbell:
   # Ready state (idle, waiting for finger)
   led_ready_color: blue
   led_ready_mode: "on"
-  led_ready_speed: 100
+  led_ready_speed: 0
   
   # Error state
   led_error_color: red
