@@ -98,7 +98,7 @@ class FingerprintDoorbell : public Component {
   LedConfig led_error_{1, 3, 0};      // red, on, speed 0
   LedConfig led_enroll_{3, 2, 25};    // purple, flashing, speed 25
   LedConfig led_match_{3, 3, 0};      // purple, on, speed 0
-  LedConfig led_scanning_{1, 2, 25};  // red, flashing, speed 25
+  LedConfig led_scanning_{2, 2, 25};  // blue, flashing, speed 25
 
   // Sensors
   sensor::Sensor *match_id_sensor_{nullptr};

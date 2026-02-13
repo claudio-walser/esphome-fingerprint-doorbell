@@ -65,25 +65,25 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_IGNORE_TOUCH_RING, default=False): cv.boolean,
         cv.Optional(CONF_API_TOKEN): cv.string,
         # LED Ready state (idle, waiting for finger)
-        cv.Optional(CONF_LED_READY_COLOR, default="blue"): cv.one_of(*LED_COLORS, lower=True),
-        cv.Optional(CONF_LED_READY_MODE, default="breathing"): cv.one_of(*LED_MODES, lower=True),
-        cv.Optional(CONF_LED_READY_SPEED, default=100): cv.int_range(min=0, max=255),
+        cv.Optional(CONF_LED_READY_COLOR): cv.one_of(*LED_COLORS, lower=True),
+        cv.Optional(CONF_LED_READY_MODE): cv.one_of(*LED_MODES, lower=True),
+        cv.Optional(CONF_LED_READY_SPEED): cv.int_range(min=0, max=255),
         # LED Error state
-        cv.Optional(CONF_LED_ERROR_COLOR, default="red"): cv.one_of(*LED_COLORS, lower=True),
-        cv.Optional(CONF_LED_ERROR_MODE, default="on"): cv.one_of(*LED_MODES, lower=True),
-        cv.Optional(CONF_LED_ERROR_SPEED, default=0): cv.int_range(min=0, max=255),
+        cv.Optional(CONF_LED_ERROR_COLOR): cv.one_of(*LED_COLORS, lower=True),
+        cv.Optional(CONF_LED_ERROR_MODE): cv.one_of(*LED_MODES, lower=True),
+        cv.Optional(CONF_LED_ERROR_SPEED): cv.int_range(min=0, max=255),
         # LED Enroll state (waiting for finger during enrollment)
-        cv.Optional(CONF_LED_ENROLL_COLOR, default="purple"): cv.one_of(*LED_COLORS, lower=True),
-        cv.Optional(CONF_LED_ENROLL_MODE, default="flashing"): cv.one_of(*LED_MODES, lower=True),
-        cv.Optional(CONF_LED_ENROLL_SPEED, default=25): cv.int_range(min=0, max=255),
+        cv.Optional(CONF_LED_ENROLL_COLOR): cv.one_of(*LED_COLORS, lower=True),
+        cv.Optional(CONF_LED_ENROLL_MODE): cv.one_of(*LED_MODES, lower=True),
+        cv.Optional(CONF_LED_ENROLL_SPEED): cv.int_range(min=0, max=255),
         # LED Match state (fingerprint matched)
-        cv.Optional(CONF_LED_MATCH_COLOR, default="purple"): cv.one_of(*LED_COLORS, lower=True),
-        cv.Optional(CONF_LED_MATCH_MODE, default="on"): cv.one_of(*LED_MODES, lower=True),
-        cv.Optional(CONF_LED_MATCH_SPEED, default=0): cv.int_range(min=0, max=255),
+        cv.Optional(CONF_LED_MATCH_COLOR): cv.one_of(*LED_COLORS, lower=True),
+        cv.Optional(CONF_LED_MATCH_MODE): cv.one_of(*LED_MODES, lower=True),
+        cv.Optional(CONF_LED_MATCH_SPEED): cv.int_range(min=0, max=255),
         # LED Scanning state (finger detected, scanning)
-        cv.Optional(CONF_LED_SCANNING_COLOR, default="blue"): cv.one_of(*LED_COLORS, lower=True),
-        cv.Optional(CONF_LED_SCANNING_MODE, default="flashing"): cv.one_of(*LED_MODES, lower=True),
-        cv.Optional(CONF_LED_SCANNING_SPEED, default=25): cv.int_range(min=0, max=255),
+        cv.Optional(CONF_LED_SCANNING_COLOR): cv.one_of(*LED_COLORS, lower=True),
+        cv.Optional(CONF_LED_SCANNING_MODE): cv.one_of(*LED_MODES, lower=True),
+        cv.Optional(CONF_LED_SCANNING_SPEED): cv.int_range(min=0, max=255),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -195,37 +195,42 @@ async def to_code(config):
     if CONF_API_TOKEN in config:
         cg.add(var.set_api_token(config[CONF_API_TOKEN]))
 
-    # LED Ready configuration
-    cg.add(var.set_led_ready(
-        LED_COLORS[config[CONF_LED_READY_COLOR]],
-        LED_MODES[config[CONF_LED_READY_MODE]],
-        config[CONF_LED_READY_SPEED]
-    ))
+    # LED Ready configuration (only if any value specified)
+    if CONF_LED_READY_COLOR in config or CONF_LED_READY_MODE in config or CONF_LED_READY_SPEED in config:
+        cg.add(var.set_led_ready(
+            LED_COLORS.get(config.get(CONF_LED_READY_COLOR), 2),  # default blue
+            LED_MODES.get(config.get(CONF_LED_READY_MODE), 1),    # default breathing
+            config.get(CONF_LED_READY_SPEED, 100)
+        ))
 
-    # LED Error configuration
-    cg.add(var.set_led_error(
-        LED_COLORS[config[CONF_LED_ERROR_COLOR]],
-        LED_MODES[config[CONF_LED_ERROR_MODE]],
-        config[CONF_LED_ERROR_SPEED]
-    ))
+    # LED Error configuration (only if any value specified)
+    if CONF_LED_ERROR_COLOR in config or CONF_LED_ERROR_MODE in config or CONF_LED_ERROR_SPEED in config:
+        cg.add(var.set_led_error(
+            LED_COLORS.get(config.get(CONF_LED_ERROR_COLOR), 1),  # default red
+            LED_MODES.get(config.get(CONF_LED_ERROR_MODE), 3),    # default on
+            config.get(CONF_LED_ERROR_SPEED, 0)
+        ))
 
-    # LED Enroll configuration
-    cg.add(var.set_led_enroll(
-        LED_COLORS[config[CONF_LED_ENROLL_COLOR]],
-        LED_MODES[config[CONF_LED_ENROLL_MODE]],
-        config[CONF_LED_ENROLL_SPEED]
-    ))
+    # LED Enroll configuration (only if any value specified)
+    if CONF_LED_ENROLL_COLOR in config or CONF_LED_ENROLL_MODE in config or CONF_LED_ENROLL_SPEED in config:
+        cg.add(var.set_led_enroll(
+            LED_COLORS.get(config.get(CONF_LED_ENROLL_COLOR), 3),  # default purple
+            LED_MODES.get(config.get(CONF_LED_ENROLL_MODE), 2),    # default flashing
+            config.get(CONF_LED_ENROLL_SPEED, 25)
+        ))
 
-    # LED Match configuration
-    cg.add(var.set_led_match(
-        LED_COLORS[config[CONF_LED_MATCH_COLOR]],
-        LED_MODES[config[CONF_LED_MATCH_MODE]],
-        config[CONF_LED_MATCH_SPEED]
-    ))
+    # LED Match configuration (only if any value specified)
+    if CONF_LED_MATCH_COLOR in config or CONF_LED_MATCH_MODE in config or CONF_LED_MATCH_SPEED in config:
+        cg.add(var.set_led_match(
+            LED_COLORS.get(config.get(CONF_LED_MATCH_COLOR), 3),  # default purple
+            LED_MODES.get(config.get(CONF_LED_MATCH_MODE), 3),    # default on
+            config.get(CONF_LED_MATCH_SPEED, 0)
+        ))
 
-    # LED Scanning configuration
-    cg.add(var.set_led_scanning(
-        LED_COLORS[config[CONF_LED_SCANNING_COLOR]],
-        LED_MODES[config[CONF_LED_SCANNING_MODE]],
-        config[CONF_LED_SCANNING_SPEED]
-    ))
+    # LED Scanning configuration (only if any value specified)
+    if CONF_LED_SCANNING_COLOR in config or CONF_LED_SCANNING_MODE in config or CONF_LED_SCANNING_SPEED in config:
+        cg.add(var.set_led_scanning(
+            LED_COLORS.get(config.get(CONF_LED_SCANNING_COLOR), 2),  # default blue
+            LED_MODES.get(config.get(CONF_LED_SCANNING_MODE), 2),    # default flashing
+            config.get(CONF_LED_SCANNING_SPEED, 25)
+        ))
