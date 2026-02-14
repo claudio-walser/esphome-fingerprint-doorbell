@@ -13,9 +13,8 @@ external_components:
   - source:
       type: git
       url: https://github.com/claudio-walser/esphome-fingerprint-doorbell
-      ref: main
+      ref: v1.0.0
     components: [ fingerprint_doorbell ]
-    refresh: 0s
 
 esphome:
   libraries:
@@ -39,11 +38,11 @@ fingerprint_doorbell:
   doorbell_pin: GPIO19 # Output when no match (doorbell event)
   ignore_touch_ring: false
   api_token: ${api_encryption_key}  # Protects REST API endpoints
-  
+
   # LED configuration (colors: red, blue, purple)
   # LED modes: breathing, flashing, on, off, gradual_on, gradual_off
   # LED speed: 0-255 (lower = faster)
-  
+
   # Ready state (idle, waiting for finger)
   led_ready_color: blue
   led_ready_mode: "on"
@@ -58,7 +57,7 @@ fingerprint_doorbell:
   led_match_color: purple
   led_match_mode: "on"
   led_match_speed: 0
-  
+
   # No match state (fingerprint not recognized, doorbell ring)
   led_no_match_color: red
   led_no_match_mode: "on"
@@ -68,7 +67,7 @@ fingerprint_doorbell:
   led_error_color: red
   led_error_mode: flashing
   led_error_speed: 25
-  
+
   # Enrollment state (waiting for finger during enrollment)
   led_enroll_color: purple
   led_enroll_mode: flashing
