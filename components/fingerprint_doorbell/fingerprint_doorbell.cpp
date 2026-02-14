@@ -508,12 +508,11 @@ void FingerprintDoorbell::process_enrollment() {
         this->save_fingerprint_name(this->enroll_id_, this->enroll_name_);
         this->finger_->getTemplateCount();
         
-        this->mode_ = Mode::SCAN;
-        this->enroll_step_ = EnrollStep::IDLE;
-        this->set_led_ring_match();  // Use match LED for successful enrollment
-        this->publish_enroll_status("Success!");
+        // Show success LED and wait for finger to be removed
+        this->enroll_step_ = EnrollStep::DONE;
+        this->set_led_ring_match();  // Purple glow for success
+        this->publish_enroll_status("Success! Remove finger");
         this->publish_last_action("Enrolled: " + this->enroll_name_ + " (ID " + std::to_string(this->enroll_id_) + ")");
-        this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
       } else {
         ESP_LOGW(TAG, "Error storing model: %d", result);
         this->mode_ = Mode::SCAN;
@@ -522,6 +521,18 @@ void FingerprintDoorbell::process_enrollment() {
         this->publish_enroll_status("Error storing");
         this->publish_last_action("Enrollment failed: storage error");
         this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
+      }
+      break;
+    
+    case EnrollStep::DONE:
+      // Wait for finger to be removed before returning to scan mode
+      result = this->finger_->getImage();
+      if (result == FINGERPRINT_NOFINGER) {
+        ESP_LOGI(TAG, "Enrollment complete, finger removed");
+        this->mode_ = Mode::SCAN;
+        this->enroll_step_ = EnrollStep::IDLE;
+        this->set_led_ring_ready();
+        this->publish_enroll_status("Complete");
       }
       break;
       
