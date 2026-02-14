@@ -576,15 +576,11 @@ std::string FingerprintDoorbell::get_fingerprint_list_json() {
     return "[]";
   }
   
-  // Scan all slots to find enrolled fingerprints
-  uint16_t capacity = this->finger_->capacity > 0 ? this->finger_->capacity : 200;
-  for (uint16_t id = 1; id <= capacity; id++) {
-    if (this->finger_->loadModel(id) == FINGERPRINT_OK) {
-      if (!first) json += ",";
-      std::string name = this->get_fingerprint_name(id);
-      json += "{\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
-      first = false;
-    }
+  // Use cached fingerprint names instead of scanning all slots
+  for (const auto& pair : this->fingerprint_names_) {
+    if (!first) json += ",";
+    json += "{\"id\":" + std::to_string(pair.first) + ",\"name\":\"" + pair.second + "\"}";
+    first = false;
   }
   
   json += "]";
