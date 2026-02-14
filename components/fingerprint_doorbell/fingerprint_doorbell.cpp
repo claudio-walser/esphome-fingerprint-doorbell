@@ -716,6 +716,8 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     return url.rfind("/fingerprint/", 0) == 0;  // starts_with equivalent
   }
   
+  bool isRequestHandlerTrivial() const override { return false; }
+  
   bool check_auth(AsyncWebServerRequest *request) const {
     std::string token = this->parent_->get_api_token();
     if (token.empty()) {
@@ -732,10 +734,28 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     return auth_header.value() == expected;
   }
   
+  void send_cors_response(AsyncWebServerRequest *request, int code, const char *content_type, const std::string &body) {
+    AsyncWebServerResponse *response = request->beginResponse(code, content_type, body.c_str());
+    // Note: Access-Control-Allow-Origin is added by ESPHome's web_server component
+    response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    request->send(response);
+  }
+
   void handleRequest(AsyncWebServerRequest *request) override {
+    // Handle CORS preflight
+    if (request->method() == HTTP_OPTIONS) {
+      auto *response = request->beginResponse(200, "text/plain", "");
+      response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      response->addHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      response->addHeader("Access-Control-Max-Age", "86400");
+      request->send(response);
+      return;
+    }
+
     // Check authorization for all endpoints
     if (!this->check_auth(request)) {
-      request->send(401, "application/json", "{\"error\":\"Unauthorized\"}");
+      this->send_cors_response(request, 401, "application/json", "{\"error\":\"Unauthorized\"}");
       return;
     }
     
@@ -744,7 +764,7 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     // GET /fingerprint/list - Get list of enrolled fingerprints
     if (url == "/fingerprint/list" && request->method() == HTTP_GET) {
       std::string json = this->parent_->get_fingerprint_list_json();
-      request->send(200, "application/json", json.c_str());
+      this->send_cors_response(request, 200, "application/json", json);
       return;
     }
     
@@ -755,14 +775,14 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       json += ",\"enrolling\":" + std::string(this->parent_->is_enrolling() ? "true" : "false");
       json += ",\"count\":" + std::to_string(this->parent_->get_enrolled_count());
       json += "}";
-      request->send(200, "application/json", json.c_str());
+      this->send_cors_response(request, 200, "application/json", json);
       return;
     }
     
     // POST /fingerprint/enroll?id=X&name=Y - Start enrollment
     if (url == "/fingerprint/enroll" && request->method() == HTTP_POST) {
       if (!request->hasParam("id") || !request->hasParam("name")) {
-        request->send(400, "application/json", "{\"error\":\"Missing id or name parameter\"}");
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id or name parameter\"}");
         return;
       }
       std::string id_str = request->getParam("id")->value();
@@ -770,27 +790,27 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       uint16_t id = std::atoi(id_str.c_str());
       
       if (id < 1 || id > 200) {
-        request->send(400, "application/json", "{\"error\":\"ID must be 1-200\"}");
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"ID must be 1-200\"}");
         return;
       }
       
       this->parent_->start_enrollment(id, name);
       std::string response = "{\"status\":\"enrollment_started\",\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
-      request->send(200, "application/json", response.c_str());
+      this->send_cors_response(request, 200, "application/json", response);
       return;
     }
     
     // POST /fingerprint/cancel - Cancel enrollment
     if (url == "/fingerprint/cancel" && request->method() == HTTP_POST) {
       this->parent_->cancel_enrollment();
-      request->send(200, "application/json", "{\"status\":\"cancelled\"}");
+      this->send_cors_response(request, 200, "application/json", "{\"status\":\"cancelled\"}");
       return;
     }
     
     // POST /fingerprint/delete?id=X - Delete fingerprint
     if (url == "/fingerprint/delete" && request->method() == HTTP_POST) {
       if (!request->hasParam("id")) {
-        request->send(400, "application/json", "{\"error\":\"Missing id parameter\"}");
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id parameter\"}");
         return;
       }
       std::string id_str = request->getParam("id")->value();
@@ -798,9 +818,9 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       
       if (this->parent_->delete_fingerprint(id)) {
         std::string response = "{\"status\":\"deleted\",\"id\":" + std::to_string(id) + "}";
-        request->send(200, "application/json", response.c_str());
+        this->send_cors_response(request, 200, "application/json", response);
       } else {
-        request->send(500, "application/json", "{\"error\":\"Delete failed\"}");
+        this->send_cors_response(request, 500, "application/json", "{\"error\":\"Delete failed\"}");
       }
       return;
     }
@@ -808,9 +828,9 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     // POST /fingerprint/delete_all - Delete all fingerprints
     if (url == "/fingerprint/delete_all" && request->method() == HTTP_POST) {
       if (this->parent_->delete_all_fingerprints()) {
-        request->send(200, "application/json", "{\"status\":\"all_deleted\"}");
+        this->send_cors_response(request, 200, "application/json", "{\"status\":\"all_deleted\"}");
       } else {
-        request->send(500, "application/json", "{\"error\":\"Delete all failed\"}");
+        this->send_cors_response(request, 500, "application/json", "{\"error\":\"Delete all failed\"}");
       }
       return;
     }
@@ -818,7 +838,7 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     // POST /fingerprint/rename?id=X&name=Y - Rename fingerprint
     if (url == "/fingerprint/rename" && request->method() == HTTP_POST) {
       if (!request->hasParam("id") || !request->hasParam("name")) {
-        request->send(400, "application/json", "{\"error\":\"Missing id or name parameter\"}");
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id or name parameter\"}");
         return;
       }
       std::string id_str = request->getParam("id")->value();
@@ -827,14 +847,14 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       
       if (this->parent_->rename_fingerprint(id, name)) {
         std::string response = "{\"status\":\"renamed\",\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
-        request->send(200, "application/json", response.c_str());
+        this->send_cors_response(request, 200, "application/json", response);
       } else {
-        request->send(500, "application/json", "{\"error\":\"Rename failed\"}");
+        this->send_cors_response(request, 500, "application/json", "{\"error\":\"Rename failed\"}");
       }
       return;
     }
     
-    request->send(404, "application/json", "{\"error\":\"Unknown endpoint\"}");
+    this->send_cors_response(request, 404, "application/json", "{\"error\":\"Unknown endpoint\"}");
   }
   
  protected:
