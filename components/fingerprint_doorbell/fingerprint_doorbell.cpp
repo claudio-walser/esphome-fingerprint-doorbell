@@ -424,10 +424,10 @@ void FingerprintDoorbell::process_enrollment() {
       result = this->finger_->image2Tz(this->enroll_sample_);
       if (result == FINGERPRINT_OK) {
         ESP_LOGI(TAG, "Image converted for sample %d", this->enroll_sample_);
-        this->set_led_ring_match();  // Use match LED for successful enrollment pass
         
         if (this->enroll_sample_ >= 5) {
-          // All 5 samples collected, create model immediately (timing sensitive!)
+          // All 5 samples collected, create model immediately
+          // Don't send LED commands before createModel - it can corrupt buffer state
           this->publish_enroll_status("Creating model...");
           result = this->finger_->createModel();
           if (result == FINGERPRINT_OK) {
@@ -452,7 +452,8 @@ void FingerprintDoorbell::process_enrollment() {
             this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
           }
         } else {
-          // Need more samples
+          // Need more samples - show LED feedback for successful scan
+          this->set_led_ring_match();
           this->enroll_step_ = EnrollStep::WAITING_REMOVE;
           this->publish_enroll_status("Remove finger");
         }
