@@ -427,9 +427,30 @@ void FingerprintDoorbell::process_enrollment() {
         this->set_led_ring_match();  // Use match LED for successful enrollment pass
         
         if (this->enroll_sample_ >= 5) {
-          // All 5 samples collected, create model
-          this->enroll_step_ = EnrollStep::CREATING_MODEL;
+          // All 5 samples collected, create model immediately (timing sensitive!)
           this->publish_enroll_status("Creating model...");
+          result = this->finger_->createModel();
+          if (result == FINGERPRINT_OK) {
+            ESP_LOGI(TAG, "Model created successfully");
+            this->enroll_step_ = EnrollStep::STORING;
+            this->publish_enroll_status("Storing...");
+          } else if (result == FINGERPRINT_ENROLLMISMATCH) {
+            ESP_LOGW(TAG, "Fingerprints did not match");
+            this->mode_ = Mode::SCAN;
+            this->enroll_step_ = EnrollStep::IDLE;
+            this->set_led_ring_error();
+            this->publish_enroll_status("Error: prints don't match");
+            this->publish_last_action("Enrollment failed: mismatch");
+            this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
+          } else {
+            ESP_LOGW(TAG, "Error creating model: %d", result);
+            this->mode_ = Mode::SCAN;
+            this->enroll_step_ = EnrollStep::IDLE;
+            this->set_led_ring_error();
+            this->publish_enroll_status("Error creating model");
+            this->publish_last_action("Enrollment failed");
+            this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
+          }
         } else {
           // Need more samples
           this->enroll_step_ = EnrollStep::WAITING_REMOVE;
