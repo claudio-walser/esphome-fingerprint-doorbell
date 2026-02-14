@@ -557,9 +557,14 @@ bool FingerprintDoorbell::delete_all_fingerprints() {
   }
   
   if (this->finger_->emptyDatabase() == FINGERPRINT_OK) {
-    // Clear all saved names
+    // Collect IDs first to avoid modifying map while iterating
+    std::vector<uint16_t> ids_to_delete;
     for (auto const& pair : this->fingerprint_names_) {
-      this->delete_fingerprint_name(pair.first);
+      ids_to_delete.push_back(pair.first);
+    }
+    // Now delete each name from preferences
+    for (uint16_t id : ids_to_delete) {
+      this->delete_fingerprint_name(id);
     }
     this->fingerprint_names_.clear();
     this->finger_->getTemplateCount();
