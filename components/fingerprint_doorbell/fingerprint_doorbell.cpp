@@ -884,6 +884,9 @@ void FingerprintDoorbell::publish_last_action(const std::string &action) {
 // ==================== REST API ====================
 
 class FingerprintRequestHandler : public AsyncWebHandler {
+ protected:
+  std::string body_buffer_;
+  
  public:
   FingerprintRequestHandler(FingerprintDoorbell *parent) : parent_(parent) {}
   
@@ -1068,18 +1071,16 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       
       // Accumulate body data
       if (index == 0) {
-        request->_tempObject = new std::string();
+        this->body_buffer_.clear();
       }
-      std::string *body = static_cast<std::string*>(request->_tempObject);
-      body->append(reinterpret_cast<char*>(data), len);
+      this->body_buffer_.append(reinterpret_cast<char*>(data), len);
       
       // Process when complete
       if (index + len == total) {
         // Parse JSON manually (simple parsing for our known format)
         // Expected: {"id":1,"name":"John","template":"base64data"}
-        std::string json = *body;
-        delete body;
-        request->_tempObject = nullptr;
+        std::string json = this->body_buffer_;
+        this->body_buffer_.clear();
         
         // Extract id
         size_t id_pos = json.find("\"id\":");
