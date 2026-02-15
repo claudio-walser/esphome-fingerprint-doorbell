@@ -731,7 +731,8 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   // Packet format: 0xEF01 (2) + addr (4) + type (1) + length (2) + data (256) + checksum (2) = 267 bytes
   
   uint8_t packet[267];
-  uint32_t addr = this->finger_->theAddress;
+  // Use default address 0xFFFFFFFF (standard for most fingerprint sensors)
+  const uint32_t addr = 0xFFFFFFFF;
   
   for (int pkt_num = 0; pkt_num < 2; pkt_num++) {
     bool is_last = (pkt_num == 1);
