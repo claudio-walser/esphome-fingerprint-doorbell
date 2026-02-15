@@ -703,10 +703,10 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     mySerial.read();
   }
   
-  // Template transfers always use 256-byte data packets regardless of sensor's packet_len setting
-  // This matches how the sensor sends templates during download (getModel)
-  const uint16_t packet_len = 256;
-  ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes)", id, template_data.size());
+  // Use sensor's configured packet length (128 bytes for most R503 sensors)
+  // The FPM library uses this approach for uploads even though downloads come in 256-byte packets
+  const uint16_t packet_len = 128;
+  ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes, using %d-byte packets)", id, template_data.size(), packet_len);
   
   // Send download command (0x09) - tells sensor to receive template into buffer 1
   uint8_t cmd_data[] = {FINGERPRINT_DOWNLOAD, 0x01};  // Download to char buffer 1
@@ -786,11 +786,40 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
              pkt_num, num_packets, (int)chunk_size, packet[6], checksum);
     
     written += chunk_size;
-    delay(50);
+    delay(20);  // Small delay between packets
   }
   
   // Wait for sensor to process the data
-  delay(200);
+  delay(100);
+  
+  // Check if sensor sent any response after receiving data
+  // Some sensors send an ACK after the end data packet
+  int avail = mySerial.available();
+  if (avail > 0) {
+    ESP_LOGD(TAG, "Sensor sent %d bytes after data transfer", avail);
+    uint8_t resp[20];
+    int resp_len = 0;
+    while (mySerial.available() && resp_len < 20) {
+      resp[resp_len++] = mySerial.read();
+    }
+    // Log first few bytes
+    if (resp_len >= 10) {
+      ESP_LOGD(TAG, "Response: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+               resp[0], resp[1], resp[2], resp[3], resp[4], resp[5], resp[6], resp[7], resp[8], resp[9]);
+      // Check if it's an ACK packet with error code
+      if (resp[0] == 0xEF && resp[1] == 0x01 && resp[6] == 0x07) {
+        // ACK packet, byte 9 is the confirmation code
+        ESP_LOGD(TAG, "Received ACK with code: 0x%02X", resp[9]);
+        if (resp[9] != 0x00) {
+          ESP_LOGW(TAG, "Sensor rejected template data with error: 0x%02X", resp[9]);
+          this->mode_ = previous_mode;
+          return false;
+        }
+      }
+    }
+  } else {
+    ESP_LOGD(TAG, "No response from sensor after data transfer");
+  }
   
   // Store the template from buffer to flash
   uint8_t result = this->finger_->storeModel(id);
