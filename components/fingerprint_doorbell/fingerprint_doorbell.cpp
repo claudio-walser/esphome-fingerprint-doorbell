@@ -623,44 +623,47 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
   result = this->finger_->getModel();
   if (result != FINGERPRINT_OK) {
     ESP_LOGW(TAG, "Failed to start template transfer: error %d", result);
+    this->mode_ = previous_mode;
     return false;
   }
   
-  // Read template data packets from sensor
-  // Template is 512 bytes total (sent in packets based on packet_len setting)
+  // Read raw bytes from serial - template is 512 bytes sent in 2 packets of 256 bytes each
+  // Each packet: 12 bytes header/overhead + 256 bytes data = ~534 total bytes for both packets
+  // Packet structure: 2-byte start, 4-byte addr, 1-byte type, 2-byte length, N-byte data, 2-byte checksum
+  uint8_t raw_data[600];
+  memset(raw_data, 0xff, sizeof(raw_data));
+  
+  uint32_t start_time = millis();
+  const uint32_t TIMEOUT_MS = 5000;
+  int idx = 0;
+  
+  while (idx < 534 && (millis() - start_time < TIMEOUT_MS)) {
+    if (mySerial.available()) {
+      raw_data[idx++] = mySerial.read();
+    }
+  }
+  
+  ESP_LOGD(TAG, "Read %d raw bytes from sensor", idx);
+  
+  if (idx < 534) {
+    ESP_LOGW(TAG, "Timeout reading template data, only got %d bytes", idx);
+    this->mode_ = previous_mode;
+    return false;
+  }
+  
+  // Extract template data from packets
+  // Packet format: 0xEF01 (2) + addr (4) + type (1) + length (2) + data (256) + checksum (2) = 267 bytes per packet
   template_data.clear();
   template_data.reserve(512);
   
-  bool receiving = true;
-  uint32_t start_time = millis();
-  const uint32_t TIMEOUT_MS = 5000;
-  
-  while (receiving && (millis() - start_time < TIMEOUT_MS)) {
-    // Read packet using the library's getStructuredPacket
-    Adafruit_Fingerprint_Packet packet(FINGERPRINT_DATAPACKET, 0, nullptr);
-    result = this->finger_->getStructuredPacket(&packet, 1000);
-    
-    if (result != FINGERPRINT_OK) {
-      ESP_LOGW(TAG, "Error reading template packet: %d", result);
-      return false;
-    }
-    
-    // Extract data from packet (length includes 2-byte checksum, so data is length-2)
-    uint16_t data_len = packet.length > 2 ? packet.length - 2 : 0;
-    for (uint16_t i = 0; i < data_len && i < 64; i++) {
-      template_data.push_back(packet.data[i]);
-    }
-    
-    // Check if this is the last packet
-    if (packet.type == FINGERPRINT_ENDDATAPACKET) {
-      receiving = false;
-    }
+  // First packet data starts at byte 9 (after header)
+  for (int i = 0; i < 256; i++) {
+    template_data.push_back(raw_data[9 + i]);
   }
   
-  if (receiving) {
-    ESP_LOGW(TAG, "Timeout reading template data");
-    this->mode_ = previous_mode;
-    return false;
+  // Second packet data starts at byte 9 + 256 + 2 (checksum) + 9 (next header) = 276
+  for (int i = 0; i < 256; i++) {
+    template_data.push_back(raw_data[276 + i]);
   }
   
   ESP_LOGI(TAG, "Downloaded template %d: %d bytes", id, template_data.size());
