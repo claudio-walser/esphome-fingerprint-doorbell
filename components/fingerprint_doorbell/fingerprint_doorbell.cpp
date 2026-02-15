@@ -1087,24 +1087,23 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       return;
     }
     
-    // POST /fingerprint/template - Import fingerprint template
-    // Body: application/x-www-form-urlencoded with id, name, template fields
+    // POST /fingerprint/template?id=X&name=Y&template=BASE64 - Import fingerprint template
     if (url == "/fingerprint/template" && request->method() == HTTP_POST) {
-      // Check for POST body parameters (second param = true for POST body)
-      bool has_id = request->hasParam("id", true);
-      bool has_name = request->hasParam("name", true);
-      bool has_template = request->hasParam("template", true);
+      // Parameters come via query string (ESPHome IDF doesn't parse POST body)
+      bool has_id = request->hasParam("id");
+      bool has_name = request->hasParam("name");
+      bool has_template = request->hasParam("template");
       
       if (!has_id || !has_name || !has_template) {
-        ESP_LOGW(TAG, "Import request missing POST parameters: id=%d name=%d template=%d",
+        ESP_LOGW(TAG, "Import request missing parameters: id=%d name=%d template=%d",
                  has_id, has_name, has_template);
         this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id, name, or template parameter\"}");
         return;
       }
       
-      std::string id_str = request->getParam("id", true)->value();
-      std::string name = request->getParam("name", true)->value();
-      std::string template_base64 = request->getParam("template", true)->value();
+      std::string id_str = request->getParam("id")->value();
+      std::string name = request->getParam("name")->value();
+      std::string template_base64 = request->getParam("template")->value();
       uint16_t id = std::atoi(id_str.c_str());
       
       ESP_LOGI(TAG, "Import request: id=%d name='%s' template_len=%d", id, name.c_str(), template_base64.length());
