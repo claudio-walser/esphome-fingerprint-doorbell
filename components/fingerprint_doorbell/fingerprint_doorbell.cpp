@@ -606,10 +606,16 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
     return false;
   }
   
+  // Temporarily pause scanning to avoid conflicts
+  Mode previous_mode = this->mode_;
+  this->mode_ = Mode::IDLE;
+  delay(100);  // Give sensor time to settle
+  
   // Load template from flash into character buffer 1
   uint8_t result = this->finger_->loadModel(id);
   if (result != FINGERPRINT_OK) {
     ESP_LOGW(TAG, "Failed to load template %d: error %d", id, result);
+    this->mode_ = previous_mode;
     return false;
   }
   
@@ -653,10 +659,12 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
   
   if (receiving) {
     ESP_LOGW(TAG, "Timeout reading template data");
+    this->mode_ = previous_mode;
     return false;
   }
   
   ESP_LOGI(TAG, "Downloaded template %d: %d bytes", id, template_data.size());
+  this->mode_ = previous_mode;
   return true;
 }
 
@@ -670,6 +678,11 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     ESP_LOGW(TAG, "Invalid template size: %d bytes", template_data.size());
     return false;
   }
+  
+  // Temporarily pause scanning to avoid conflicts
+  Mode previous_mode = this->mode_;
+  this->mode_ = Mode::IDLE;
+  delay(100);  // Give sensor time to settle
   
   ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes)", id, template_data.size());
   
@@ -724,6 +737,7 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   uint8_t result = this->finger_->storeModel(id);
   if (result != FINGERPRINT_OK) {
     ESP_LOGW(TAG, "Failed to store template at ID %d: error %d", id, result);
+    this->mode_ = previous_mode;
     return false;
   }
   
@@ -734,6 +748,7 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   ESP_LOGI(TAG, "Template uploaded and stored at ID %d with name '%s'", id, name.c_str());
   this->publish_last_action("Imported: " + name + " (ID " + std::to_string(id) + ")");
   
+  this->mode_ = previous_mode;
   return true;
 }
 
