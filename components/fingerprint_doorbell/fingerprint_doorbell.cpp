@@ -688,8 +688,8 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     return false;
   }
   
-  if (template_data.size() < 256 || template_data.size() > 1024) {
-    ESP_LOGW(TAG, "Invalid template size: %d bytes", template_data.size());
+  if (template_data.size() != 512) {
+    ESP_LOGW(TAG, "Invalid template size: %d bytes (expected 512)", template_data.size());
     return false;
   }
   
@@ -714,43 +714,70 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   Adafruit_Fingerprint_Packet ack_packet(FINGERPRINT_ACKPACKET, 0, nullptr);
   if (this->finger_->getStructuredPacket(&ack_packet, 1000) != FINGERPRINT_OK) {
     ESP_LOGW(TAG, "No acknowledgment for download command");
+    this->mode_ = previous_mode;
     return false;
   }
   
   if (ack_packet.type != FINGERPRINT_ACKPACKET || ack_packet.data[0] != FINGERPRINT_OK) {
     ESP_LOGW(TAG, "Download command failed: type=0x%02X, code=0x%02X", ack_packet.type, ack_packet.data[0]);
+    this->mode_ = previous_mode;
     return false;
   }
   
-  // Send template data in packets
-  // Use packet size based on sensor configuration (default 64 bytes for data)
-  const size_t PACKET_DATA_SIZE = 64;  // Adafruit_Fingerprint_Packet.data is 64 bytes
-  size_t offset = 0;
+  ESP_LOGD(TAG, "Sensor ready to receive template data");
   
-  while (offset < template_data.size()) {
-    size_t remaining = template_data.size() - offset;
-    size_t chunk_size = (remaining > PACKET_DATA_SIZE) ? PACKET_DATA_SIZE : remaining;
-    bool is_last = (offset + chunk_size >= template_data.size());
+  // Send template data in raw packets matching sensor's expected format
+  // Sensor expects 2 packets of 256 bytes each, sent as raw serial data
+  // Packet format: 0xEF01 (2) + addr (4) + type (1) + length (2) + data (256) + checksum (2) = 267 bytes
+  
+  uint8_t packet[267];
+  uint32_t addr = this->finger_->theAddress;
+  
+  for (int pkt_num = 0; pkt_num < 2; pkt_num++) {
+    bool is_last = (pkt_num == 1);
+    size_t data_offset = pkt_num * 256;
     
-    // Prepare data
-    uint8_t chunk[64] = {0};
-    for (size_t i = 0; i < chunk_size; i++) {
-      chunk[i] = template_data[offset + i];
+    // Header: 0xEF01
+    packet[0] = 0xEF;
+    packet[1] = 0x01;
+    
+    // Address (4 bytes, big-endian)
+    packet[2] = (addr >> 24) & 0xFF;
+    packet[3] = (addr >> 16) & 0xFF;
+    packet[4] = (addr >> 8) & 0xFF;
+    packet[5] = addr & 0xFF;
+    
+    // Packet type: 0x02 for data, 0x08 for end data
+    packet[6] = is_last ? FINGERPRINT_ENDDATAPACKET : FINGERPRINT_DATAPACKET;
+    
+    // Length: 256 data bytes + 2 checksum bytes = 258 (0x0102)
+    packet[7] = 0x01;
+    packet[8] = 0x02;
+    
+    // Data (256 bytes)
+    for (int i = 0; i < 256; i++) {
+      packet[9 + i] = template_data[data_offset + i];
     }
     
-    // Send as data packet or end data packet
-    uint8_t packet_type = is_last ? FINGERPRINT_ENDDATAPACKET : FINGERPRINT_DATAPACKET;
-    Adafruit_Fingerprint_Packet data_packet(packet_type, chunk_size, chunk);
-    this->finger_->writeStructuredPacket(data_packet);
+    // Checksum: sum of type + length + data
+    uint16_t checksum = packet[6] + packet[7] + packet[8];
+    for (int i = 0; i < 256; i++) {
+      checksum += packet[9 + i];
+    }
+    packet[265] = (checksum >> 8) & 0xFF;
+    packet[266] = checksum & 0xFF;
     
-    offset += chunk_size;
+    // Send raw packet
+    mySerial.write(packet, 267);
+    mySerial.flush();
     
-    // Small delay between packets
-    delay(10);
+    ESP_LOGD(TAG, "Sent packet %d/2 (type=0x%02X, checksum=0x%04X)", pkt_num + 1, packet[6], checksum);
+    
+    delay(50);
   }
   
-  // Wait for sensor to process
-  delay(100);
+  // Wait for sensor to process the data
+  delay(200);
   
   // Store the template from buffer to flash
   uint8_t result = this->finger_->storeModel(id);
