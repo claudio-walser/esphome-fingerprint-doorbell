@@ -609,7 +609,12 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
   // Temporarily pause scanning to avoid conflicts
   Mode previous_mode = this->mode_;
   this->mode_ = Mode::IDLE;
-  delay(100);  // Give sensor time to settle
+  delay(200);  // Give sensor time to settle
+  
+  // Flush any leftover data in serial buffer
+  while (mySerial.available()) {
+    mySerial.read();
+  }
   
   // Load template from flash into character buffer 1
   uint8_t result = this->finger_->loadModel(id);
@@ -617,6 +622,12 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
     ESP_LOGW(TAG, "Failed to load template %d: error %d", id, result);
     this->mode_ = previous_mode;
     return false;
+  }
+  
+  // Flush again after loadModel response
+  delay(50);
+  while (mySerial.available()) {
+    mySerial.read();
   }
   
   // Start template transfer from sensor
@@ -685,7 +696,12 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   // Temporarily pause scanning to avoid conflicts
   Mode previous_mode = this->mode_;
   this->mode_ = Mode::IDLE;
-  delay(100);  // Give sensor time to settle
+  delay(200);  // Give sensor time to settle
+  
+  // Flush any leftover data in serial buffer
+  while (mySerial.available()) {
+    mySerial.read();
+  }
   
   ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes)", id, template_data.size());
   
