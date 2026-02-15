@@ -88,6 +88,10 @@ class FingerprintDoorbell : public Component {
   bool is_enrolling() { return mode_ == Mode::ENROLL; }
   bool is_sensor_connected() { return sensor_connected_; }
   std::string get_api_token() { return api_token_; }
+  
+  // Template transfer methods for copying fingerprints between devices
+  bool get_template(uint16_t id, std::vector<uint8_t> &template_data);
+  bool upload_template(uint16_t id, const std::string &name, const std::vector<uint8_t> &template_data);
 
  protected:
   GPIOPin *touch_pin_{nullptr};

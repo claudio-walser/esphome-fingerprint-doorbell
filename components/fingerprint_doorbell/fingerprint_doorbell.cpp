@@ -595,6 +595,148 @@ bool FingerprintDoorbell::rename_fingerprint(uint16_t id, const std::string &new
   return true;
 }
 
+// ==================== TEMPLATE TRANSFER ====================
+
+// Define FINGERPRINT_DOWNLOAD command (not in Arduino library)
+#define FINGERPRINT_DOWNLOAD 0x09
+
+bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &template_data) {
+  if (!this->sensor_connected_ || this->finger_ == nullptr) {
+    ESP_LOGW(TAG, "Cannot get template: sensor not connected");
+    return false;
+  }
+  
+  // Load template from flash into character buffer 1
+  uint8_t result = this->finger_->loadModel(id);
+  if (result != FINGERPRINT_OK) {
+    ESP_LOGW(TAG, "Failed to load template %d: error %d", id, result);
+    return false;
+  }
+  
+  // Start template transfer from sensor
+  result = this->finger_->getModel();
+  if (result != FINGERPRINT_OK) {
+    ESP_LOGW(TAG, "Failed to start template transfer: error %d", result);
+    return false;
+  }
+  
+  // Read template data packets from sensor
+  // Template is 512 bytes total (sent in packets based on packet_len setting)
+  template_data.clear();
+  template_data.reserve(512);
+  
+  bool receiving = true;
+  uint32_t start_time = millis();
+  const uint32_t TIMEOUT_MS = 5000;
+  
+  while (receiving && (millis() - start_time < TIMEOUT_MS)) {
+    // Read packet using the library's getStructuredPacket
+    Adafruit_Fingerprint_Packet packet(FINGERPRINT_DATAPACKET, 0, nullptr);
+    result = this->finger_->getStructuredPacket(&packet, 1000);
+    
+    if (result != FINGERPRINT_OK) {
+      ESP_LOGW(TAG, "Error reading template packet: %d", result);
+      return false;
+    }
+    
+    // Extract data from packet (length includes 2-byte checksum, so data is length-2)
+    uint16_t data_len = packet.length > 2 ? packet.length - 2 : 0;
+    for (uint16_t i = 0; i < data_len && i < 64; i++) {
+      template_data.push_back(packet.data[i]);
+    }
+    
+    // Check if this is the last packet
+    if (packet.type == FINGERPRINT_ENDDATAPACKET) {
+      receiving = false;
+    }
+  }
+  
+  if (receiving) {
+    ESP_LOGW(TAG, "Timeout reading template data");
+    return false;
+  }
+  
+  ESP_LOGI(TAG, "Downloaded template %d: %d bytes", id, template_data.size());
+  return true;
+}
+
+bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, const std::vector<uint8_t> &template_data) {
+  if (!this->sensor_connected_ || this->finger_ == nullptr) {
+    ESP_LOGW(TAG, "Cannot upload template: sensor not connected");
+    return false;
+  }
+  
+  if (template_data.size() < 256 || template_data.size() > 1024) {
+    ESP_LOGW(TAG, "Invalid template size: %d bytes", template_data.size());
+    return false;
+  }
+  
+  ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes)", id, template_data.size());
+  
+  // Send download command (0x09) - tells sensor to receive template into buffer 1
+  uint8_t cmd_data[] = {FINGERPRINT_DOWNLOAD, 0x01};  // Download to char buffer 1
+  Adafruit_Fingerprint_Packet cmd_packet(FINGERPRINT_COMMANDPACKET, sizeof(cmd_data), cmd_data);
+  this->finger_->writeStructuredPacket(cmd_packet);
+  
+  // Read acknowledgment
+  Adafruit_Fingerprint_Packet ack_packet(FINGERPRINT_ACKPACKET, 0, nullptr);
+  if (this->finger_->getStructuredPacket(&ack_packet, 1000) != FINGERPRINT_OK) {
+    ESP_LOGW(TAG, "No acknowledgment for download command");
+    return false;
+  }
+  
+  if (ack_packet.type != FINGERPRINT_ACKPACKET || ack_packet.data[0] != FINGERPRINT_OK) {
+    ESP_LOGW(TAG, "Download command failed: type=0x%02X, code=0x%02X", ack_packet.type, ack_packet.data[0]);
+    return false;
+  }
+  
+  // Send template data in packets
+  // Use packet size based on sensor configuration (default 64 bytes for data)
+  const size_t PACKET_DATA_SIZE = 64;  // Adafruit_Fingerprint_Packet.data is 64 bytes
+  size_t offset = 0;
+  
+  while (offset < template_data.size()) {
+    size_t remaining = template_data.size() - offset;
+    size_t chunk_size = (remaining > PACKET_DATA_SIZE) ? PACKET_DATA_SIZE : remaining;
+    bool is_last = (offset + chunk_size >= template_data.size());
+    
+    // Prepare data
+    uint8_t chunk[64] = {0};
+    for (size_t i = 0; i < chunk_size; i++) {
+      chunk[i] = template_data[offset + i];
+    }
+    
+    // Send as data packet or end data packet
+    uint8_t packet_type = is_last ? FINGERPRINT_ENDDATAPACKET : FINGERPRINT_DATAPACKET;
+    Adafruit_Fingerprint_Packet data_packet(packet_type, chunk_size, chunk);
+    this->finger_->writeStructuredPacket(data_packet);
+    
+    offset += chunk_size;
+    
+    // Small delay between packets
+    delay(10);
+  }
+  
+  // Wait for sensor to process
+  delay(100);
+  
+  // Store the template from buffer to flash
+  uint8_t result = this->finger_->storeModel(id);
+  if (result != FINGERPRINT_OK) {
+    ESP_LOGW(TAG, "Failed to store template at ID %d: error %d", id, result);
+    return false;
+  }
+  
+  // Save the name
+  this->save_fingerprint_name(id, name);
+  this->finger_->getTemplateCount();
+  
+  ESP_LOGI(TAG, "Template uploaded and stored at ID %d with name '%s'", id, name.c_str());
+  this->publish_last_action("Imported: " + name + " (ID " + std::to_string(id) + ")");
+  
+  return true;
+}
+
 // ==================== UTILITIES ====================
 
 uint16_t FingerprintDoorbell::get_enrolled_count() {
@@ -888,7 +1030,160 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       return;
     }
     
+    // GET /fingerprint/template?id=X - Export fingerprint template as base64
+    if (url == "/fingerprint/template" && request->method() == HTTP_GET) {
+      if (!request->hasParam("id")) {
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id parameter\"}");
+        return;
+      }
+      std::string id_str = request->getParam("id")->value();
+      uint16_t id = std::atoi(id_str.c_str());
+      
+      std::vector<uint8_t> template_data;
+      if (this->parent_->get_template(id, template_data)) {
+        // Base64 encode the template data
+        std::string base64 = this->base64_encode(template_data);
+        std::string name = this->parent_->get_fingerprint_name(id);
+        std::string response = "{\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\",\"template\":\"" + base64 + "\"}";
+        this->send_cors_response(request, 200, "application/json", response);
+      } else {
+        this->send_cors_response(request, 500, "application/json", "{\"error\":\"Failed to export template\"}");
+      }
+      return;
+    }
+    
     this->send_cors_response(request, 404, "application/json", "{\"error\":\"Unknown endpoint\"}");
+  }
+  
+  // Handle body for POST requests with JSON body
+  void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) override {
+    std::string url = request->url();
+    
+    // POST /fingerprint/template - Import fingerprint template from base64
+    if (url == "/fingerprint/template" && request->method() == HTTP_POST) {
+      // Check authorization
+      if (!this->check_auth(request)) {
+        return;  // Response will be sent in handleRequest
+      }
+      
+      // Accumulate body data
+      if (index == 0) {
+        request->_tempObject = new std::string();
+      }
+      std::string *body = static_cast<std::string*>(request->_tempObject);
+      body->append(reinterpret_cast<char*>(data), len);
+      
+      // Process when complete
+      if (index + len == total) {
+        // Parse JSON manually (simple parsing for our known format)
+        // Expected: {"id":1,"name":"John","template":"base64data"}
+        std::string json = *body;
+        delete body;
+        request->_tempObject = nullptr;
+        
+        // Extract id
+        size_t id_pos = json.find("\"id\":");
+        size_t name_pos = json.find("\"name\":\"");
+        size_t template_pos = json.find("\"template\":\"");
+        
+        if (id_pos == std::string::npos || name_pos == std::string::npos || template_pos == std::string::npos) {
+          this->send_cors_response(request, 400, "application/json", "{\"error\":\"Invalid JSON format\"}");
+          return;
+        }
+        
+        // Parse id
+        size_t id_start = id_pos + 5;
+        size_t id_end = json.find_first_of(",}", id_start);
+        uint16_t id = std::atoi(json.substr(id_start, id_end - id_start).c_str());
+        
+        // Parse name
+        size_t name_start = name_pos + 8;
+        size_t name_end = json.find("\"", name_start);
+        std::string name = json.substr(name_start, name_end - name_start);
+        
+        // Parse template
+        size_t template_start = template_pos + 12;
+        size_t template_end = json.find("\"", template_start);
+        std::string template_base64 = json.substr(template_start, template_end - template_start);
+        
+        // Decode base64
+        std::vector<uint8_t> template_data = this->base64_decode(template_base64);
+        
+        if (template_data.empty()) {
+          this->send_cors_response(request, 400, "application/json", "{\"error\":\"Invalid base64 template data\"}");
+          return;
+        }
+        
+        if (this->parent_->upload_template(id, name, template_data)) {
+          std::string response = "{\"status\":\"imported\",\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
+          this->send_cors_response(request, 200, "application/json", response);
+        } else {
+          this->send_cors_response(request, 500, "application/json", "{\"error\":\"Failed to import template\"}");
+        }
+      }
+    }
+  }
+  
+  // Base64 encoding
+  std::string base64_encode(const std::vector<uint8_t> &data) const {
+    static const char* chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string result;
+    result.reserve((data.size() + 2) / 3 * 4);
+    
+    for (size_t i = 0; i < data.size(); i += 3) {
+      uint32_t n = static_cast<uint32_t>(data[i]) << 16;
+      if (i + 1 < data.size()) n |= static_cast<uint32_t>(data[i + 1]) << 8;
+      if (i + 2 < data.size()) n |= static_cast<uint32_t>(data[i + 2]);
+      
+      result += chars[(n >> 18) & 0x3F];
+      result += chars[(n >> 12) & 0x3F];
+      result += (i + 1 < data.size()) ? chars[(n >> 6) & 0x3F] : '=';
+      result += (i + 2 < data.size()) ? chars[n & 0x3F] : '=';
+    }
+    return result;
+  }
+  
+  // Base64 decoding
+  std::vector<uint8_t> base64_decode(const std::string &input) const {
+    static const int decode_table[256] = {
+      -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+      -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+      -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
+      52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
+      -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
+      15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
+      -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
+      41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
+      -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+      -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+      -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+      -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+      -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+      -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+      -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+      -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
+    };
+    
+    std::vector<uint8_t> result;
+    result.reserve(input.size() * 3 / 4);
+    
+    uint32_t val = 0;
+    int bits = 0;
+    
+    for (char c : input) {
+      if (c == '=') break;
+      int d = decode_table[static_cast<uint8_t>(c)];
+      if (d < 0) continue;
+      
+      val = (val << 6) | d;
+      bits += 6;
+      
+      if (bits >= 8) {
+        bits -= 8;
+        result.push_back(static_cast<uint8_t>((val >> bits) & 0xFF));
+      }
+    }
+    return result;
   }
   
  protected:
