@@ -703,7 +703,10 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     mySerial.read();
   }
   
-  ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes)", id, template_data.size());
+  // Get sensor's configured packet length
+  this->finger_->getParameters();
+  uint16_t packet_len = this->finger_->packet_len;
+  ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes, packet_len=%d)", id, template_data.size(), packet_len);
   
   // Send download command (0x09) - tells sensor to receive template into buffer 1
   uint8_t cmd_data[] = {FINGERPRINT_DOWNLOAD, 0x01};  // Download to char buffer 1
@@ -726,17 +729,22 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   
   ESP_LOGD(TAG, "Sensor ready to receive template data");
   
-  // Send template data in raw packets matching sensor's expected format
-  // Sensor expects 2 packets of 256 bytes each, sent as raw serial data
-  // Packet format: 0xEF01 (2) + addr (4) + type (1) + length (2) + data (256) + checksum (2) = 267 bytes
-  
-  uint8_t packet[267];
-  // Use default address 0xFFFFFFFF (standard for most fingerprint sensors)
+  // Send template data in packets matching sensor's configured packet length
+  // Packet format: 0xEF01 (2) + addr (4) + type (1) + length (2) + data (N) + checksum (2)
   const uint32_t addr = 0xFFFFFFFF;
+  size_t total_size = template_data.size();
+  size_t written = 0;
+  int pkt_num = 0;
+  int num_packets = (total_size + packet_len - 1) / packet_len;  // Round up
   
-  for (int pkt_num = 0; pkt_num < 2; pkt_num++) {
-    bool is_last = (pkt_num == 1);
-    size_t data_offset = pkt_num * 256;
+  // Allocate packet buffer: header(9) + data(packet_len) + checksum(2)
+  std::vector<uint8_t> packet(9 + packet_len + 2);
+  
+  while (written < total_size) {
+    size_t remaining = total_size - written;
+    size_t chunk_size = (remaining < packet_len) ? remaining : packet_len;
+    bool is_last = (written + chunk_size >= total_size);
+    pkt_num++;
     
     // Header: 0xEF01
     packet[0] = 0xEF;
@@ -751,29 +759,33 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     // Packet type: 0x02 for data, 0x08 for end data
     packet[6] = is_last ? FINGERPRINT_ENDDATAPACKET : FINGERPRINT_DATAPACKET;
     
-    // Length: 256 data bytes + 2 checksum bytes = 258 (0x0102)
-    packet[7] = 0x01;
-    packet[8] = 0x02;
+    // Length: data bytes + 2 checksum bytes
+    uint16_t pkt_len_field = chunk_size + 2;
+    packet[7] = (pkt_len_field >> 8) & 0xFF;
+    packet[8] = pkt_len_field & 0xFF;
     
-    // Data (256 bytes)
-    for (int i = 0; i < 256; i++) {
-      packet[9 + i] = template_data[data_offset + i];
+    // Data
+    for (size_t i = 0; i < chunk_size; i++) {
+      packet[9 + i] = template_data[written + i];
     }
     
-    // Checksum: sum of type + length + data
+    // Checksum: sum of type + length_high + length_low + data
     uint16_t checksum = packet[6] + packet[7] + packet[8];
-    for (int i = 0; i < 256; i++) {
+    for (size_t i = 0; i < chunk_size; i++) {
       checksum += packet[9 + i];
     }
-    packet[265] = (checksum >> 8) & 0xFF;
-    packet[266] = checksum & 0xFF;
+    packet[9 + chunk_size] = (checksum >> 8) & 0xFF;
+    packet[9 + chunk_size + 1] = checksum & 0xFF;
     
     // Send raw packet
-    mySerial.write(packet, 267);
+    size_t total_pkt_len = 9 + chunk_size + 2;
+    mySerial.write(packet.data(), total_pkt_len);
     mySerial.flush();
     
-    ESP_LOGD(TAG, "Sent packet %d/2 (type=0x%02X, checksum=0x%04X)", pkt_num + 1, packet[6], checksum);
+    ESP_LOGD(TAG, "Sent packet %d/%d (%d bytes, type=0x%02X, checksum=0x%04X)", 
+             pkt_num, num_packets, chunk_size, packet[6], checksum);
     
+    written += chunk_size;
     delay(50);
   }
   

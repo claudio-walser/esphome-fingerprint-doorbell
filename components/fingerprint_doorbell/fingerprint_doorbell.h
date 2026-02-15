@@ -8,6 +8,7 @@
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 #include <map>
+#include <vector>
 #include <Adafruit_Fingerprint.h>
 
 namespace esphome {
