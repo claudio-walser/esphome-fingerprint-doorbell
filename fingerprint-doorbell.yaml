@@ -13,9 +13,9 @@ external_components:
   - source:
       type: git
       url: https://github.com/claudio-walser/esphome-fingerprint-doorbell
-      ref: v1.1.2
+      ref: main
     components: [ fingerprint_doorbell ]
-
+    refresh: 0s
 esphome:
   libraries:
     - "adafruit/Adafruit Fingerprint Sensor Library@^2.1.0"

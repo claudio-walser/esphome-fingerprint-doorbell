@@ -703,10 +703,10 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     mySerial.read();
   }
   
-  // Get sensor's configured packet length
-  this->finger_->getParameters();
-  uint16_t packet_len = this->finger_->packet_len;
-  ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes, packet_len=%d)", id, template_data.size(), packet_len);
+  // Template transfers always use 256-byte data packets regardless of sensor's packet_len setting
+  // This matches how the sensor sends templates during download (getModel)
+  const uint16_t packet_len = 256;
+  ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes)", id, template_data.size());
   
   // Send download command (0x09) - tells sensor to receive template into buffer 1
   uint8_t cmd_data[] = {FINGERPRINT_DOWNLOAD, 0x01};  // Download to char buffer 1
@@ -783,7 +783,7 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     mySerial.flush();
     
     ESP_LOGD(TAG, "Sent packet %d/%d (%d bytes, type=0x%02X, checksum=0x%04X)", 
-             pkt_num, num_packets, chunk_size, packet[6], checksum);
+             pkt_num, num_packets, (int)chunk_size, packet[6], checksum);
     
     written += chunk_size;
     delay(50);
