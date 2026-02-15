@@ -1087,12 +1087,13 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       return;
     }
     
-    // POST /fingerprint/template?id=X&name=Y&template=BASE64 - Import fingerprint template
+    // POST /fingerprint/template - Import fingerprint template
+    // Body: application/x-www-form-urlencoded with id, name, template fields
     if (url == "/fingerprint/template" && request->method() == HTTP_POST) {
-      // Parameters come via query string (ESPHome IDF doesn't parse POST body)
-      bool has_id = request->hasParam("id");
-      bool has_name = request->hasParam("name");
-      bool has_template = request->hasParam("template");
+      // Use hasArg/arg for POST body parameters (form-urlencoded)
+      bool has_id = request->hasArg("id");
+      bool has_name = request->hasArg("name");
+      bool has_template = request->hasArg("template");
       
       if (!has_id || !has_name || !has_template) {
         ESP_LOGW(TAG, "Import request missing parameters: id=%d name=%d template=%d",
@@ -1101,9 +1102,9 @@ class FingerprintRequestHandler : public AsyncWebHandler {
         return;
       }
       
-      std::string id_str = request->getParam("id")->value();
-      std::string name = request->getParam("name")->value();
-      std::string template_base64 = request->getParam("template")->value();
+      std::string id_str = request->arg("id");
+      std::string name = request->arg("name");
+      std::string template_base64 = request->arg("template");
       uint16_t id = std::atoi(id_str.c_str());
       
       ESP_LOGI(TAG, "Import request: id=%d name='%s' template_len=%d", id, name.c_str(), template_base64.length());
