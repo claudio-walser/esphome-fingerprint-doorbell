@@ -970,6 +970,7 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     }
     
     std::string url = request->url();
+    ESP_LOGD(TAG, "Request: %s %s", request->method() == HTTP_GET ? "GET" : (request->method() == HTTP_POST ? "POST" : "OTHER"), url.c_str());
     
     // GET /fingerprint/list - Get list of enrolled fingerprints
     if (url == "/fingerprint/list" && request->method() == HTTP_GET) {
@@ -1086,25 +1087,38 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       return;
     }
     
-    // POST /fingerprint/template?id=X&name=Y&template=BASE64 - Import fingerprint template
+    // POST /fingerprint/template - Import fingerprint template
+    // Body: application/x-www-form-urlencoded with id, name, template fields
     if (url == "/fingerprint/template" && request->method() == HTTP_POST) {
-      if (!request->hasParam("id") || !request->hasParam("name") || !request->hasParam("template")) {
+      // Check for POST body parameters (second param = true for POST body)
+      bool has_id = request->hasParam("id", true);
+      bool has_name = request->hasParam("name", true);
+      bool has_template = request->hasParam("template", true);
+      
+      if (!has_id || !has_name || !has_template) {
+        ESP_LOGW(TAG, "Import request missing POST parameters: id=%d name=%d template=%d",
+                 has_id, has_name, has_template);
         this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id, name, or template parameter\"}");
         return;
       }
       
-      std::string id_str = request->getParam("id")->value();
-      std::string name = request->getParam("name")->value();
-      std::string template_base64 = request->getParam("template")->value();
+      std::string id_str = request->getParam("id", true)->value();
+      std::string name = request->getParam("name", true)->value();
+      std::string template_base64 = request->getParam("template", true)->value();
       uint16_t id = std::atoi(id_str.c_str());
+      
+      ESP_LOGI(TAG, "Import request: id=%d name='%s' template_len=%d", id, name.c_str(), template_base64.length());
       
       // Decode base64
       std::vector<uint8_t> template_data = this->base64_decode(template_base64);
       
       if (template_data.empty()) {
+        ESP_LOGW(TAG, "Failed to decode base64 template (len=%d)", template_base64.length());
         this->send_cors_response(request, 400, "application/json", "{\"error\":\"Invalid base64 template data\"}");
         return;
       }
+      
+      ESP_LOGI(TAG, "Decoded template: %d bytes", template_data.size());
       
       if (this->parent_->upload_template(id, name, template_data)) {
         std::string response = "{\"status\":\"imported\",\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
@@ -1166,6 +1180,8 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     
     for (char c : input) {
       if (c == '=') break;
+      // URL encoding converts '+' to space, so treat space as '+'
+      if (c == ' ') c = '+';
       int d = decode_table[static_cast<uint8_t>(c)];
       if (d < 0) continue;
       
