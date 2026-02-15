@@ -902,9 +902,6 @@ void FingerprintDoorbell::publish_last_action(const std::string &action) {
 // ==================== REST API ====================
 
 class FingerprintRequestHandler : public AsyncWebHandler {
- protected:
-  std::string body_buffer_;
-  
  public:
   FingerprintRequestHandler(FingerprintDoorbell *parent) : parent_(parent) {}
   
@@ -1073,74 +1070,36 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       return;
     }
     
-    this->send_cors_response(request, 404, "application/json", "{\"error\":\"Unknown endpoint\"}");
-  }
-  
-  // Handle body for POST requests with JSON body
-  void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) override {
-    std::string url = request->url();
-    
-    // POST /fingerprint/template - Import fingerprint template from base64
+    // POST /fingerprint/template?id=X&name=Y&template=BASE64 - Import fingerprint template
     if (url == "/fingerprint/template" && request->method() == HTTP_POST) {
-      // Check authorization
-      if (!this->check_auth(request)) {
-        return;  // Response will be sent in handleRequest
+      if (!request->hasParam("id") || !request->hasParam("name") || !request->hasParam("template")) {
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id, name, or template parameter\"}");
+        return;
       }
       
-      // Accumulate body data
-      if (index == 0) {
-        this->body_buffer_.clear();
-      }
-      this->body_buffer_.append(reinterpret_cast<char*>(data), len);
+      std::string id_str = request->getParam("id")->value();
+      std::string name = request->getParam("name")->value();
+      std::string template_base64 = request->getParam("template")->value();
+      uint16_t id = std::atoi(id_str.c_str());
       
-      // Process when complete
-      if (index + len == total) {
-        // Parse JSON manually (simple parsing for our known format)
-        // Expected: {"id":1,"name":"John","template":"base64data"}
-        std::string json = this->body_buffer_;
-        this->body_buffer_.clear();
-        
-        // Extract id
-        size_t id_pos = json.find("\"id\":");
-        size_t name_pos = json.find("\"name\":\"");
-        size_t template_pos = json.find("\"template\":\"");
-        
-        if (id_pos == std::string::npos || name_pos == std::string::npos || template_pos == std::string::npos) {
-          this->send_cors_response(request, 400, "application/json", "{\"error\":\"Invalid JSON format\"}");
-          return;
-        }
-        
-        // Parse id
-        size_t id_start = id_pos + 5;
-        size_t id_end = json.find_first_of(",}", id_start);
-        uint16_t id = std::atoi(json.substr(id_start, id_end - id_start).c_str());
-        
-        // Parse name
-        size_t name_start = name_pos + 8;
-        size_t name_end = json.find("\"", name_start);
-        std::string name = json.substr(name_start, name_end - name_start);
-        
-        // Parse template
-        size_t template_start = template_pos + 12;
-        size_t template_end = json.find("\"", template_start);
-        std::string template_base64 = json.substr(template_start, template_end - template_start);
-        
-        // Decode base64
-        std::vector<uint8_t> template_data = this->base64_decode(template_base64);
-        
-        if (template_data.empty()) {
-          this->send_cors_response(request, 400, "application/json", "{\"error\":\"Invalid base64 template data\"}");
-          return;
-        }
-        
-        if (this->parent_->upload_template(id, name, template_data)) {
-          std::string response = "{\"status\":\"imported\",\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
-          this->send_cors_response(request, 200, "application/json", response);
-        } else {
-          this->send_cors_response(request, 500, "application/json", "{\"error\":\"Failed to import template\"}");
-        }
+      // Decode base64
+      std::vector<uint8_t> template_data = this->base64_decode(template_base64);
+      
+      if (template_data.empty()) {
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Invalid base64 template data\"}");
+        return;
       }
+      
+      if (this->parent_->upload_template(id, name, template_data)) {
+        std::string response = "{\"status\":\"imported\",\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
+        this->send_cors_response(request, 200, "application/json", response);
+      } else {
+        this->send_cors_response(request, 500, "application/json", "{\"error\":\"Failed to import template\"}");
+      }
+      return;
     }
+    
+    this->send_cors_response(request, 404, "application/json", "{\"error\":\"Unknown endpoint\"}");
   }
   
   // Base64 encoding
