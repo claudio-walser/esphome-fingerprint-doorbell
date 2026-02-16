@@ -173,8 +173,21 @@ bool FingerprintDoorbell::connect_sensor() {
     return false;
   }
 
-  // Only initialize serial on first attempt
+  // Only initialize serial and load password on first attempt
   if (this->connect_attempts_ == 0) {
+    // Load stored password from preferences
+    this->load_sensor_password();
+    
+    // If paired, set the password for verification
+    if (this->sensor_paired_) {
+      this->finger_->thePassword = this->sensor_password_;
+      ESP_LOGI(TAG, "Using stored password for paired sensor");
+    } else {
+      // Use default password for unpaired sensor
+      this->finger_->thePassword = 0x00000000;
+      ESP_LOGI(TAG, "Using default password (sensor unpaired)");
+    }
+    
     // Explicitly initialize Serial2 with pins for ESP-IDF framework
     // RX=GPIO16, TX=GPIO17 are the default Serial2 pins on ESP32
     mySerial.begin(57600, SERIAL_8N1, 16, 17);
@@ -206,6 +219,11 @@ bool FingerprintDoorbell::connect_sensor() {
     
     this->connect_attempts_ = 0;  // Reset for future reconnects
     return true;
+  }
+  
+  // If we're paired but verification failed, it could be a different sensor
+  if (this->sensor_paired_) {
+    ESP_LOGW(TAG, "Password verification failed - sensor may have been swapped!");
   }
   
   // Allow up to 10 attempts (5 seconds interval * 10 = 50 seconds total)
@@ -1013,6 +1031,86 @@ void FingerprintDoorbell::publish_last_action(const std::string &action) {
   }
 }
 
+// ==================== SENSOR PAIRING ====================
+
+void FingerprintDoorbell::load_sensor_password() {
+  ESPPreferenceObject pref = global_preferences->make_preference<uint32_t>(fnv1_hash("sensor_pwd"));
+  uint32_t stored_password = 0;
+  if (pref.load(&stored_password)) {
+    // Check for special "unpaired" marker (all 1s is unlikely as a real password)
+    if (stored_password != 0xFFFFFFFF) {
+      this->sensor_password_ = stored_password;
+      this->sensor_paired_ = true;
+      ESP_LOGI(TAG, "Loaded sensor password from preferences");
+    } else {
+      this->sensor_paired_ = false;
+      ESP_LOGI(TAG, "Sensor is unpaired (marker found)");
+    }
+  } else {
+    // No password stored - sensor is unpaired
+    this->sensor_paired_ = false;
+    ESP_LOGI(TAG, "No sensor password in preferences - unpaired");
+  }
+}
+
+void FingerprintDoorbell::save_sensor_password() {
+  ESPPreferenceObject pref = global_preferences->make_preference<uint32_t>(fnv1_hash("sensor_pwd"));
+  pref.save(&this->sensor_password_);
+  ESP_LOGI(TAG, "Saved sensor password to preferences");
+}
+
+bool FingerprintDoorbell::pair_sensor(uint32_t password) {
+  if (!this->sensor_connected_ || this->finger_ == nullptr) {
+    ESP_LOGW(TAG, "Cannot pair: sensor not connected");
+    return false;
+  }
+  
+  ESP_LOGI(TAG, "Pairing sensor with new password...");
+  
+  // Set the new password on the sensor
+  uint8_t result = this->finger_->setPassword(password);
+  if (result != FINGERPRINT_OK) {
+    ESP_LOGW(TAG, "Failed to set sensor password: error %d", result);
+    return false;
+  }
+  
+  // Update our stored password to match
+  this->finger_->thePassword = password;
+  this->sensor_password_ = password;
+  this->sensor_paired_ = true;
+  this->save_sensor_password();
+  
+  ESP_LOGI(TAG, "Sensor paired successfully");
+  this->publish_last_action("Sensor paired");
+  return true;
+}
+
+bool FingerprintDoorbell::unpair_sensor() {
+  if (!this->sensor_connected_ || this->finger_ == nullptr) {
+    ESP_LOGW(TAG, "Cannot unpair: sensor not connected");
+    return false;
+  }
+  
+  ESP_LOGI(TAG, "Unpairing sensor (resetting to default password)...");
+  
+  // Reset sensor to default password (0x00000000)
+  uint8_t result = this->finger_->setPassword(0x00000000);
+  if (result != FINGERPRINT_OK) {
+    ESP_LOGW(TAG, "Failed to reset sensor password: error %d", result);
+    return false;
+  }
+  
+  // Update our state
+  this->finger_->thePassword = 0x00000000;
+  this->sensor_password_ = 0xFFFFFFFF;  // Marker for "unpaired"
+  this->sensor_paired_ = false;
+  this->save_sensor_password();
+  
+  ESP_LOGI(TAG, "Sensor unpaired successfully");
+  this->publish_last_action("Sensor unpaired");
+  return true;
+}
+
 // ==================== REST API ====================
 
 class FingerprintRequestHandler : public AsyncWebHandler {
@@ -1081,10 +1179,46 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     if (url == "/fingerprint/status" && request->method() == HTTP_GET) {
       std::string json = "{";
       json += "\"connected\":" + std::string(this->parent_->is_sensor_connected() ? "true" : "false");
+      json += ",\"paired\":" + std::string(this->parent_->is_sensor_paired() ? "true" : "false");
       json += ",\"enrolling\":" + std::string(this->parent_->is_enrolling() ? "true" : "false");
       json += ",\"count\":" + std::to_string(this->parent_->get_enrolled_count());
       json += "}";
       this->send_cors_response(request, 200, "application/json", json);
+      return;
+    }
+    
+    // POST /fingerprint/pair?password=XXXXXXXX - Pair sensor with password (hex string)
+    if (url == "/fingerprint/pair" && request->method() == HTTP_POST) {
+      if (!request->hasParam("password")) {
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing password parameter\"}");
+        return;
+      }
+      std::string password_str = request->getParam("password")->value();
+      
+      // Parse hex string to uint32_t
+      uint32_t password = 0;
+      char *endptr;
+      password = strtoul(password_str.c_str(), &endptr, 16);
+      if (*endptr != '\0' || password_str.empty()) {
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Invalid password format (use hex, e.g. 12345678)\"}");
+        return;
+      }
+      
+      if (this->parent_->pair_sensor(password)) {
+        this->send_cors_response(request, 200, "application/json", "{\"status\":\"paired\"}");
+      } else {
+        this->send_cors_response(request, 500, "application/json", "{\"error\":\"Failed to pair sensor\"}");
+      }
+      return;
+    }
+    
+    // POST /fingerprint/unpair - Unpair sensor (reset to default password)
+    if (url == "/fingerprint/unpair" && request->method() == HTTP_POST) {
+      if (this->parent_->unpair_sensor()) {
+        this->send_cors_response(request, 200, "application/json", "{\"status\":\"unpaired\"}");
+      } else {
+        this->send_cors_response(request, 500, "application/json", "{\"error\":\"Failed to unpair sensor\"}");
+      }
       return;
     }
     

@@ -88,7 +88,12 @@ class FingerprintDoorbell : public Component {
   std::string get_fingerprint_list_json();
   bool is_enrolling() { return mode_ == Mode::ENROLL; }
   bool is_sensor_connected() { return sensor_connected_; }
+  bool is_sensor_paired() { return sensor_paired_; }
   std::string get_api_token() { return api_token_; }
+  
+  // Sensor pairing - requires password to be set before sensor works
+  bool pair_sensor(uint32_t password);
+  bool unpair_sensor();
   
   // Template transfer methods for copying fingerprints between devices
   bool get_template(uint16_t id, std::vector<uint8_t> &template_data);
@@ -139,7 +144,13 @@ class FingerprintDoorbell : public Component {
   uint8_t enroll_sample_{0};
   uint32_t enroll_timeout_{0};
 
+  // Sensor pairing state
+  bool sensor_paired_{false};
+  uint32_t sensor_password_{0};
+
   // Internal methods
+  void load_sensor_password();
+  void save_sensor_password();
   bool connect_sensor();
   Match scan_fingerprint();
   void process_enrollment();
