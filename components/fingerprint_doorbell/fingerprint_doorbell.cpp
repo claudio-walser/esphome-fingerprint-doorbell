@@ -845,21 +845,37 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
       delay(20);
     }
     
-    // Wait for sensor to process
+    // CRITICAL: Wait for and read ACK packet after ENDDATAPACKET
+    // The sensor MUST send an ACK after receiving the complete data transfer
+    // We need to wait for it properly, not just check if bytes are available
     delay(100);
     
-    // Check for ACK after data transfer (some sensors send one)
+    // Wait for ACK with timeout
+    uint32_t ack_start = millis();
+    while (mySerial.available() < 12 && (millis() - ack_start < 2000)) {
+      delay(10);
+    }
+    
     if (mySerial.available() >= 12) {
       uint8_t resp[12];
       for (int i = 0; i < 12; i++) resp[i] = mySerial.read();
+      ESP_LOGD(TAG, "Buffer %d ACK raw: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+               buffer_id, resp[0], resp[1], resp[2], resp[3], resp[4], resp[5],
+               resp[6], resp[7], resp[8], resp[9], resp[10], resp[11]);
       if (resp[0] == 0xEF && resp[1] == 0x01 && resp[6] == 0x07) {
         uint8_t code = resp[9];
-        ESP_LOGD(TAG, "Buffer %d upload ACK: 0x%02X", buffer_id, code);
+        ESP_LOGI(TAG, "Buffer %d upload ACK code: 0x%02X", buffer_id, code);
         if (code != 0x00) {
-          ESP_LOGW(TAG, "Buffer %d upload rejected with code: 0x%02X", buffer_id, code);
+          ESP_LOGW(TAG, "Buffer %d upload REJECTED with code: 0x%02X", buffer_id, code);
           return false;
         }
+        ESP_LOGI(TAG, "Buffer %d upload confirmed OK", buffer_id);
+      } else {
+        ESP_LOGW(TAG, "Buffer %d: unexpected response format", buffer_id);
       }
+    } else {
+      ESP_LOGW(TAG, "Buffer %d: no ACK received after data transfer (got %d bytes)", buffer_id, mySerial.available());
+      // Continue anyway - some sensors might not send ACK
     }
     
     // Flush remaining
