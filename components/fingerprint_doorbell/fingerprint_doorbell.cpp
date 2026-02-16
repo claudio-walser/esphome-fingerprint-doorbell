@@ -747,8 +747,8 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
            template_data[12], template_data[13], template_data[14], template_data[15]);
   
   // Send download command (0x09) - tells sensor to receive template into buffer
-  // Try buffer 2 (0x02) since storeModel reads from buffer 1 - maybe there's interaction
-  uint8_t buffer_id = 0x01;  // Start with buffer 1
+  // Using buffer 2 (0x02) to avoid any interference with normal scanning
+  uint8_t buffer_id = 0x02;  // Use buffer 2
   ESP_LOGD(TAG, "Sending DOWNCHAR command to buffer %d", buffer_id);
   uint8_t cmd_data[] = {FINGERPRINT_DOWNLOAD, buffer_id};
   Adafruit_Fingerprint_Packet cmd_packet(FINGERPRINT_COMMANDPACKET, sizeof(cmd_data), cmd_data);
@@ -784,12 +784,14 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   }
   
   // Send template data in packets matching sensor's configured packet length
+  // NOTE: Cannot use Adafruit library's writeStructuredPacket for data packets
+  // because its internal buffer is limited to 64 bytes, but R503 uses 128-byte packets.
+  // We must manually construct and send the full packets.
   // Packet format: 0xEF01 (2) + addr (4) + type (1) + length (2) + data (N) + checksum (2)
   const uint32_t addr = 0xFFFFFFFF;
   size_t total_size = template_data.size();
   size_t written = 0;
   int pkt_num = 0;
-  int num_packets = (total_size + packet_len - 1) / packet_len;  // Round up
   
   // Allocate packet buffer: header(9) + data(packet_len) + checksum(2)
   std::vector<uint8_t> packet(9 + packet_len + 2);
@@ -823,7 +825,7 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
       packet[9 + i] = template_data[written + i];
     }
     
-    // Checksum: sum of type + length_high + length_low + data
+    // Checksum: sum of type + length_high + length_low + data bytes
     uint16_t checksum = packet[6] + packet[7] + packet[8];
     for (size_t i = 0; i < chunk_size; i++) {
       checksum += packet[9 + i];
@@ -831,15 +833,15 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     packet[9 + chunk_size] = (checksum >> 8) & 0xFF;
     packet[9 + chunk_size + 1] = checksum & 0xFF;
     
-    // Send raw packet
+    // Send raw packet directly to serial
     size_t total_pkt_len = 9 + chunk_size + 2;
     mySerial.write(packet.data(), total_pkt_len);
     mySerial.flush();
     
-    // Log full packet header for debugging (first 12 bytes)
-    ESP_LOGI(TAG, "Upload PKT%d header: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X (total=%d)",
-             pkt_num, packet[0], packet[1], packet[2], packet[3], packet[4], packet[5],
-             packet[6], packet[7], packet[8], packet[9], packet[10], packet[11], (int)total_pkt_len);
+    // Log packet info for debugging
+    ESP_LOGI(TAG, "Upload PKT%d: type=0x%02X, data_len=%d, checksum=0x%04X, first_data=%02X %02X %02X %02X",
+             pkt_num, packet[6], (int)chunk_size, checksum,
+             packet[9], packet[10], packet[11], packet[12]);
     
     written += chunk_size;
     delay(20);  // Small delay between packets
@@ -880,38 +882,86 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   // Wait for sensor to fully process the template data
   delay(200);
   
-  // NOTE: Do NOT call createModel() here!
-  // createModel() is for merging two character files during enrollment.
-  // When uploading a template, the data is already a complete template
-  // that can be stored directly with storeModel().
-  // This is confirmed by the FPM library's working template transfer example.
+  // Flush any response from sensor that might have arrived
+  while (mySerial.available()) {
+    mySerial.read();
+  }
   
   // First, try to delete any existing template at this ID (optional but safe)
   ESP_LOGD(TAG, "Deleting any existing template at ID %d before storing", id);
   uint8_t del_result = this->finger_->deleteModel(id);
   ESP_LOGD(TAG, "deleteModel(%d) returned: %d", id, del_result);
-  delay(50);
+  delay(100);
   
-  ESP_LOGD(TAG, "Attempting to store template to flash at ID %d", id);
+  // Flush again after delete
+  while (mySerial.available()) {
+    mySerial.read();
+  }
   
-  // Store the template from buffer to flash
-  uint8_t result = this->finger_->storeModel(id);
-  ESP_LOGI(TAG, "storeModel(%d) returned: %d", id, result);
+  ESP_LOGD(TAG, "Attempting to store template to flash at ID %d from buffer 2", id);
   
-  // If still failing, try next available ID
+  // Store the template from buffer 2 to flash (custom command since we used buffer 2)
+  // STORE command format: 0x06, buffer_id, id_high, id_low
+  // Try multiple times with increasing delays
+  uint8_t result = FINGERPRINT_PACKETRECIEVEERR;
+  for (int attempt = 1; attempt <= 3 && result != FINGERPRINT_OK; attempt++) {
+    if (attempt > 1) {
+      ESP_LOGI(TAG, "Retry attempt %d for store...", attempt);
+      delay(200 * attempt);  // Increasing delay
+      // Flush serial before retry
+      while (mySerial.available()) mySerial.read();
+    }
+    
+    // Send custom STORE command to store from buffer 2
+    uint8_t store_cmd[] = {0x06, 0x02, (uint8_t)(id >> 8), (uint8_t)(id & 0xFF)};  // 0x02 = buffer 2
+    Adafruit_Fingerprint_Packet store_pkt(FINGERPRINT_COMMANDPACKET, sizeof(store_cmd), store_cmd);
+    this->finger_->writeStructuredPacket(store_pkt);
+    
+    // Read response
+    Adafruit_Fingerprint_Packet resp_pkt(FINGERPRINT_ACKPACKET, 0, nullptr);
+    if (this->finger_->getStructuredPacket(&resp_pkt, 1000) == FINGERPRINT_OK) {
+      result = resp_pkt.data[0];
+    } else {
+      result = FINGERPRINT_PACKETRECIEVEERR;
+    }
+    ESP_LOGI(TAG, "storeModel(id=%d, buf=2) attempt %d returned: 0x%02X", id, attempt, result);
+  }
+  
+  // If buffer 2 fails, try buffer 1 (maybe our upload went there despite the command?)
+  if (result != FINGERPRINT_OK) {
+    ESP_LOGI(TAG, "Buffer 2 failed, trying buffer 1...");
+    delay(100);
+    result = this->finger_->storeModel(id);  // Uses buffer 1
+    ESP_LOGI(TAG, "storeModel(id=%d, buf=1) returned: 0x%02X", id, result);
+  }
+  
+  // If still failing, try a different ID
   if (result != FINGERPRINT_OK) {
     this->finger_->getTemplateCount();
-    uint16_t next_id = this->finger_->templateCount + 1;
-    ESP_LOGW(TAG, "Failed to store at ID %d, trying next free ID %d...", id, next_id);
-    result = this->finger_->storeModel(next_id);
-    ESP_LOGI(TAG, "storeModel(%d) returned: %d", next_id, result);
-    if (result == FINGERPRINT_OK) {
-      id = next_id;  // Use the ID that worked
+    uint16_t next_id = (this->finger_->templateCount > 0) ? (this->finger_->templateCount + 1) : 1;
+    if (next_id != id) {  // Only try if different from original
+      ESP_LOGW(TAG, "Failed to store at ID %d, trying next free ID %d...", id, next_id);
+      delay(100);
+      result = this->finger_->storeModel(next_id);
+      ESP_LOGI(TAG, "storeModel(%d) returned: 0x%02X", next_id, result);
+      if (result == FINGERPRINT_OK) {
+        id = next_id;  // Use the ID that worked
+      }
     }
   }
   
   if (result != FINGERPRINT_OK) {
-    ESP_LOGW(TAG, "Failed to store template at ID %d: error %d", id, result);
+    // Decode error for better debugging
+    const char* error_desc = "unknown";
+    switch (result) {
+      case 0x01: error_desc = "PACKETRECIEVEERR"; break;
+      case 0x0B: error_desc = "BADLOCATION"; break;
+      case 0x0C: error_desc = "DBRANGEFAIL/invalid_template"; break;
+      case 0x0D: error_desc = "UPLOADFEATUREFAIL"; break;
+      case 0x0E: error_desc = "PACKETRESPONSEFAIL"; break;
+      case 0x18: error_desc = "FLASHERR"; break;
+    }
+    ESP_LOGW(TAG, "Failed to store template at ID %d: error 0x%02X (%s)", id, result, error_desc);
     
     // Try to read back what's in the buffer to debug
     ESP_LOGD(TAG, "Trying getModel() to check buffer contents...");
