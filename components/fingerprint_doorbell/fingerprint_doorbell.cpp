@@ -872,25 +872,28 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   // Wait longer for sensor to fully process the template data
   delay(500);
   
-  // First, try to delete any existing template at this ID
+  // First, try to delete any existing template at this ID (just in case)
   ESP_LOGD(TAG, "Deleting any existing template at ID %d before storing", id);
   uint8_t del_result = this->finger_->deleteModel(id);
   ESP_LOGD(TAG, "deleteModel(%d) returned: %d", id, del_result);
   delay(100);
   
-  // Check buffer status by trying to read back what we just sent
-  // This helps debug if the template made it to the buffer
   ESP_LOGD(TAG, "Attempting to store template to flash at ID %d", id);
   
   // Store the template from buffer to flash
   uint8_t result = this->finger_->storeModel(id);
   ESP_LOGI(TAG, "storeModel(%d) returned: %d", id, result);
   
-  // If still failing, try a different approach - store to ID 200 as a test
+  // If still failing, try next available ID
   if (result != FINGERPRINT_OK) {
-    ESP_LOGW(TAG, "Failed to store at ID %d, trying ID 200 as test...", id);
-    uint8_t test_result = this->finger_->storeModel(200);
-    ESP_LOGI(TAG, "storeModel(200) returned: %d", test_result);
+    this->finger_->getTemplateCount();
+    uint16_t next_id = this->finger_->templateCount + 1;
+    ESP_LOGW(TAG, "Failed to store at ID %d, trying next free ID %d...", id, next_id);
+    result = this->finger_->storeModel(next_id);
+    ESP_LOGI(TAG, "storeModel(%d) returned: %d", next_id, result);
+    if (result == FINGERPRINT_OK) {
+      id = next_id;  // Use the ID that worked
+    }
   }
   
   if (result != FINGERPRINT_OK) {
