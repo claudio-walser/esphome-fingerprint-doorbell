@@ -762,6 +762,19 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   
   ESP_LOGD(TAG, "Sensor ready to receive template data");
   
+  // Add small delay after ACK before sending data
+  delay(50);
+  
+  // Flush any bytes that might have arrived
+  int flushed = 0;
+  while (mySerial.available()) {
+    mySerial.read();
+    flushed++;
+  }
+  if (flushed > 0) {
+    ESP_LOGD(TAG, "Flushed %d extra bytes before sending data", flushed);
+  }
+  
   // Send template data in packets matching sensor's configured packet length
   // Packet format: 0xEF01 (2) + addr (4) + type (1) + length (2) + data (N) + checksum (2)
   const uint32_t addr = 0xFFFFFFFF;
@@ -856,10 +869,25 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     ESP_LOGD(TAG, "No response from sensor after data transfer");
   }
   
+  // Wait longer for sensor to fully process the template data
+  delay(500);
+  
+  // Check buffer status by trying to read back what we just sent
+  // This helps debug if the template made it to the buffer
+  ESP_LOGD(TAG, "Attempting to store template to flash at ID %d", id);
+  
   // Store the template from buffer to flash
   uint8_t result = this->finger_->storeModel(id);
+  ESP_LOGI(TAG, "storeModel(%d) returned: %d", id, result);
+  
   if (result != FINGERPRINT_OK) {
     ESP_LOGW(TAG, "Failed to store template at ID %d: error %d", id, result);
+    
+    // Try to get more info - attempt to read back the buffer
+    ESP_LOGD(TAG, "Trying getModel() to check if buffer has data...");
+    uint8_t check = this->finger_->getModel();
+    ESP_LOGD(TAG, "getModel() returned: %d", check);
+    
     this->mode_ = previous_mode;
     return false;
   }
