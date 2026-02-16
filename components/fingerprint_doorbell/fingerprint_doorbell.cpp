@@ -729,10 +729,15 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     mySerial.read();
   }
   
-  // Use sensor's configured packet length (128 bytes for most R503 sensors)
-  // The FPM library uses this approach for uploads even though downloads come in 256-byte packets
-  const uint16_t packet_len = 128;
+  // Use sensor's configured packet length from getParameters()
+  // This is crucial - using wrong packet size causes upload failures
+  uint16_t packet_len = this->finger_->packet_len;
+  if (packet_len == 0 || packet_len > 256) {
+    packet_len = 128;  // Safe default
+  }
   ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes, using %d-byte packets)", id, template_data.size(), packet_len);
+  ESP_LOGI(TAG, "Sensor params: capacity=%d, security=%d, packet_len=%d",
+           this->finger_->capacity, this->finger_->security_level, this->finger_->packet_len);
   
   // Log first 16 bytes of template for debugging
   ESP_LOGI(TAG, "Template data first 16 bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
@@ -872,14 +877,20 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     ESP_LOGD(TAG, "No response from sensor after data transfer");
   }
   
-  // Wait longer for sensor to fully process the template data
-  delay(500);
+  // Wait for sensor to fully process the template data
+  delay(200);
   
-  // First, try to delete any existing template at this ID (just in case)
+  // NOTE: Do NOT call createModel() here!
+  // createModel() is for merging two character files during enrollment.
+  // When uploading a template, the data is already a complete template
+  // that can be stored directly with storeModel().
+  // This is confirmed by the FPM library's working template transfer example.
+  
+  // First, try to delete any existing template at this ID (optional but safe)
   ESP_LOGD(TAG, "Deleting any existing template at ID %d before storing", id);
   uint8_t del_result = this->finger_->deleteModel(id);
   ESP_LOGD(TAG, "deleteModel(%d) returned: %d", id, del_result);
-  delay(100);
+  delay(50);
   
   ESP_LOGD(TAG, "Attempting to store template to flash at ID %d", id);
   
