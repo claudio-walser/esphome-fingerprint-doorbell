@@ -757,6 +757,7 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   // even when importing a pre-existing template.
 
   // Helper lambda to upload data to a specific buffer
+  // Follows FPM library pattern: byte-by-byte header writes, no ACK between data packets
   auto upload_to_buffer = [&](uint8_t buffer_id, const std::vector<uint8_t> &data) -> bool {
     ESP_LOGD(TAG, "Uploading %d bytes to buffer %d", (int)data.size(), buffer_id);
     
@@ -782,104 +783,68 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     }
     
     ESP_LOGD(TAG, "Buffer %d ready to receive data", buffer_id);
-    delay(50);
     
-    // Flush any extra bytes
+    // Small delay then flush any extra bytes
+    delay(10);
     while (mySerial.available()) mySerial.read();
     
-    // Send data packets
+    // Send data packets - FPM style: byte-by-byte header, bulk payload
     const uint32_t addr = 0xFFFFFFFF;
     size_t total_size = data.size();
     size_t written = 0;
     int pkt_num = 0;
-    std::vector<uint8_t> packet(9 + packet_len + 2);
     
     while (written < total_size) {
       size_t remaining = total_size - written;
-      size_t chunk_size = (remaining < packet_len) ? remaining : packet_len;
-      bool is_last = (written + chunk_size >= total_size);
+      size_t chunk_size = (remaining > packet_len) ? packet_len : remaining;
+      bool is_last = (remaining <= packet_len);
       pkt_num++;
       
-      // Header: 0xEF01
-      packet[0] = 0xEF;
-      packet[1] = 0x01;
+      // Packet type: 0x02 for data, 0x08 for final packet
+      uint8_t pkt_type = is_last ? FINGERPRINT_ENDDATAPACKET : FINGERPRINT_DATAPACKET;
       
-      // Address (4 bytes, big-endian)
-      packet[2] = (addr >> 24) & 0xFF;
-      packet[3] = (addr >> 16) & 0xFF;
-      packet[4] = (addr >> 8) & 0xFF;
-      packet[5] = addr & 0xFF;
+      // Length field: data bytes + 2 checksum bytes
+      uint16_t total_len = chunk_size + 2;
       
-      // Packet type: 0x02 for data, 0x08 for end data
-      packet[6] = is_last ? FINGERPRINT_ENDDATAPACKET : FINGERPRINT_DATAPACKET;
-      
-      // Length: data bytes + 2 checksum bytes
-      uint16_t pkt_len_field = chunk_size + 2;
-      packet[7] = (pkt_len_field >> 8) & 0xFF;
-      packet[8] = pkt_len_field & 0xFF;
-      
-      // Data
+      // Calculate checksum: type + length_high + length_low + data bytes
+      // This matches FPM: sum = (totalLen >> 8) + (totalLen & 0xFF) + pktId + data
+      uint16_t checksum = (total_len >> 8) + (total_len & 0xFF) + pkt_type;
       for (size_t i = 0; i < chunk_size; i++) {
-        packet[9 + i] = data[written + i];
+        checksum += data[written + i];
       }
       
-      // Checksum: sum of type + length_high + length_low + data bytes
-      uint16_t checksum = packet[6] + packet[7] + packet[8];
-      for (size_t i = 0; i < chunk_size; i++) {
-        checksum += packet[9 + i];
-      }
-      packet[9 + chunk_size] = (checksum >> 8) & 0xFF;
-      packet[9 + chunk_size + 1] = checksum & 0xFF;
+      // Write header byte-by-byte (FPM library style)
+      mySerial.write((uint8_t)(0xEF01 >> 8));    // Start code high
+      mySerial.write((uint8_t)(0xEF01 & 0xFF));  // Start code low
+      mySerial.write((uint8_t)(addr >> 24));     // Address byte 3
+      mySerial.write((uint8_t)(addr >> 16));     // Address byte 2
+      mySerial.write((uint8_t)(addr >> 8));      // Address byte 1
+      mySerial.write((uint8_t)(addr & 0xFF));    // Address byte 0
+      mySerial.write(pkt_type);                  // Packet type
+      mySerial.write((uint8_t)(total_len >> 8)); // Length high
+      mySerial.write((uint8_t)(total_len & 0xFF)); // Length low
       
-      // Send packet
-      size_t total_pkt_len = 9 + chunk_size + 2;
-      mySerial.write(packet.data(), total_pkt_len);
-      mySerial.flush();
+      // Write payload data (bulk write is fine for payload)
+      mySerial.write(data.data() + written, chunk_size);
       
-      if (buffer_id == 1) {  // Only log for first buffer to avoid spam
+      // Write checksum byte-by-byte
+      mySerial.write((uint8_t)(checksum >> 8));
+      mySerial.write((uint8_t)(checksum & 0xFF));
+      
+      if (buffer_id == 1) {
         ESP_LOGI(TAG, "Upload PKT%d: type=0x%02X, data_len=%d, checksum=0x%04X", 
-                 pkt_num, packet[6], (int)chunk_size, checksum);
+                 pkt_num, pkt_type, (int)chunk_size, checksum);
       }
       
       written += chunk_size;
-      delay(20);
+      
+      // Small yield between packets (FPM uses yield())
+      delay(1);
     }
     
-    // CRITICAL: Wait for and read ACK packet after ENDDATAPACKET
-    // The sensor MUST send an ACK after receiving the complete data transfer
-    // We need to wait for it properly, not just check if bytes are available
-    delay(100);
-    
-    // Wait for ACK with timeout
-    uint32_t ack_start = millis();
-    while (mySerial.available() < 12 && (millis() - ack_start < 2000)) {
-      delay(10);
-    }
-    
-    if (mySerial.available() >= 12) {
-      uint8_t resp[12];
-      for (int i = 0; i < 12; i++) resp[i] = mySerial.read();
-      ESP_LOGD(TAG, "Buffer %d ACK raw: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-               buffer_id, resp[0], resp[1], resp[2], resp[3], resp[4], resp[5],
-               resp[6], resp[7], resp[8], resp[9], resp[10], resp[11]);
-      if (resp[0] == 0xEF && resp[1] == 0x01 && resp[6] == 0x07) {
-        uint8_t code = resp[9];
-        ESP_LOGI(TAG, "Buffer %d upload ACK code: 0x%02X", buffer_id, code);
-        if (code != 0x00) {
-          ESP_LOGW(TAG, "Buffer %d upload REJECTED with code: 0x%02X", buffer_id, code);
-          return false;
-        }
-        ESP_LOGI(TAG, "Buffer %d upload confirmed OK", buffer_id);
-      } else {
-        ESP_LOGW(TAG, "Buffer %d: unexpected response format", buffer_id);
-      }
-    } else {
-      ESP_LOGW(TAG, "Buffer %d: no ACK received after data transfer (got %d bytes)", buffer_id, mySerial.available());
-      // Continue anyway - some sensors might not send ACK
-    }
-    
-    // Flush remaining
-    while (mySerial.available()) mySerial.read();
+    // FPM library does NOT wait for ACK after data packets - just returns true
+    // The result is checked when calling storeModel()
+    ESP_LOGD(TAG, "Buffer %d: sent all %d data packets", buffer_id, pkt_num);
     
     return true;
   };
