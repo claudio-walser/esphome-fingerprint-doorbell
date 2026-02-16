@@ -1248,29 +1248,28 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     // Query params: id, name
     // Body: raw base64-encoded template data
     if (url.rfind("/fingerprint/template", 0) == 0 && request->method() == HTTP_POST) {
-      // Get id and name from query parameters
-      if (!request->hasParam("id") || !request->hasParam("name")) {
+      // Get id, name, and template from query parameters
+      if (!request->hasParam("id") || !request->hasParam("name") || !request->hasParam("template")) {
         ESP_LOGW(TAG, "Import request missing query params");
-        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id or name query parameter\"}");
-        body_buffer_.clear();
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id, name, or template query parameter\"}");
         return;
       }
       
       std::string id_str = request->getParam("id")->value();
       std::string name = request->getParam("name")->value();
+      std::string template_base64 = request->getParam("template")->value();
       uint16_t id = std::atoi(id_str.c_str());
       
-      ESP_LOGI(TAG, "Template import: id=%d name='%s' body_len=%d", id, name.c_str(), body_buffer_.length());
+      ESP_LOGI(TAG, "Template import: id=%d name='%s' template_len=%d", id, name.c_str(), template_base64.length());
       
-      if (body_buffer_.empty()) {
-        ESP_LOGW(TAG, "Empty request body");
-        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Empty template data in body\"}");
+      if (template_base64.empty()) {
+        ESP_LOGW(TAG, "Empty template data");
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Empty template data\"}");
         return;
       }
       
-      // Body contains base64-encoded template
-      std::vector<uint8_t> template_data = this->base64_decode(body_buffer_);
-      body_buffer_.clear();
+      // Decode base64 template from query param
+      std::vector<uint8_t> template_data = this->base64_decode(template_base64);
       
       if (template_data.empty()) {
         ESP_LOGW(TAG, "Failed to decode base64 template");
