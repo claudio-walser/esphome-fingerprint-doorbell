@@ -746,212 +746,192 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
            template_data[8], template_data[9], template_data[10], template_data[11],
            template_data[12], template_data[13], template_data[14], template_data[15]);
   
-  // Send download command (0x09) - tells sensor to receive template into buffer
-  // Using buffer 2 (0x02) to avoid any interference with normal scanning
-  uint8_t buffer_id = 0x02;  // Use buffer 2
-  ESP_LOGD(TAG, "Sending DOWNCHAR command to buffer %d", buffer_id);
-  uint8_t cmd_data[] = {FINGERPRINT_DOWNLOAD, buffer_id};
-  Adafruit_Fingerprint_Packet cmd_packet(FINGERPRINT_COMMANDPACKET, sizeof(cmd_data), cmd_data);
-  this->finger_->writeStructuredPacket(cmd_packet);
-  
-  // Read acknowledgment
-  Adafruit_Fingerprint_Packet ack_packet(FINGERPRINT_ACKPACKET, 0, nullptr);
-  if (this->finger_->getStructuredPacket(&ack_packet, 1000) != FINGERPRINT_OK) {
-    ESP_LOGW(TAG, "No acknowledgment for download command");
-    this->mode_ = previous_mode;
-    return false;
-  }
-  
-  if (ack_packet.type != FINGERPRINT_ACKPACKET || ack_packet.data[0] != FINGERPRINT_OK) {
-    ESP_LOGW(TAG, "Download command failed: type=0x%02X, code=0x%02X", ack_packet.type, ack_packet.data[0]);
-    this->mode_ = previous_mode;
-    return false;
-  }
-  
-  ESP_LOGD(TAG, "Sensor ready to receive template data");
-  
-  // Add small delay after ACK before sending data
-  delay(50);
-  
-  // Flush any bytes that might have arrived
-  int flushed = 0;
-  while (mySerial.available()) {
-    mySerial.read();
-    flushed++;
-  }
-  if (flushed > 0) {
-    ESP_LOGD(TAG, "Flushed %d extra bytes before sending data", flushed);
-  }
-  
-  // Send template data in packets matching sensor's configured packet length
-  // NOTE: Cannot use Adafruit library's writeStructuredPacket for data packets
-  // because its internal buffer is limited to 64 bytes, but R503 uses 128-byte packets.
-  // We must manually construct and send the full packets.
-  // Packet format: 0xEF01 (2) + addr (4) + type (1) + length (2) + data (N) + checksum (2)
-  const uint32_t addr = 0xFFFFFFFF;
-  size_t total_size = template_data.size();
-  size_t written = 0;
-  int pkt_num = 0;
-  
-  // Allocate packet buffer: header(9) + data(packet_len) + checksum(2)
-  std::vector<uint8_t> packet(9 + packet_len + 2);
-  
-  while (written < total_size) {
-    size_t remaining = total_size - written;
-    size_t chunk_size = (remaining < packet_len) ? remaining : packet_len;
-    bool is_last = (written + chunk_size >= total_size);
-    pkt_num++;
+  // According to R503 manual and Adafruit library issue #36:
+  // A "template" is created by combining feature files from CharBuffer1 and CharBuffer2.
+  // When uploading a template that was previously exported via getModel(), we need to:
+  // 1. Upload the SAME data to BOTH buffers (since getModel exports a combined template)
+  // 2. Call createModel() to merge them (even though they're identical)
+  // 3. Call storeModel() to save to flash
+  //
+  // This is because the sensor expects to create a template from two separate feature files,
+  // even when importing a pre-existing template.
+
+  // Helper lambda to upload data to a specific buffer
+  auto upload_to_buffer = [&](uint8_t buffer_id, const std::vector<uint8_t> &data) -> bool {
+    ESP_LOGD(TAG, "Uploading %d bytes to buffer %d", (int)data.size(), buffer_id);
     
-    // Header: 0xEF01
-    packet[0] = 0xEF;
-    packet[1] = 0x01;
+    // Flush serial
+    while (mySerial.available()) mySerial.read();
     
-    // Address (4 bytes, big-endian)
-    packet[2] = (addr >> 24) & 0xFF;
-    packet[3] = (addr >> 16) & 0xFF;
-    packet[4] = (addr >> 8) & 0xFF;
-    packet[5] = addr & 0xFF;
+    // Send DOWNCHAR command (0x09) to specified buffer
+    uint8_t cmd_data[] = {FINGERPRINT_DOWNLOAD, buffer_id};
+    Adafruit_Fingerprint_Packet cmd_packet(FINGERPRINT_COMMANDPACKET, sizeof(cmd_data), cmd_data);
+    this->finger_->writeStructuredPacket(cmd_packet);
     
-    // Packet type: 0x02 for data, 0x08 for end data
-    packet[6] = is_last ? FINGERPRINT_ENDDATAPACKET : FINGERPRINT_DATAPACKET;
-    
-    // Length: data bytes + 2 checksum bytes
-    uint16_t pkt_len_field = chunk_size + 2;
-    packet[7] = (pkt_len_field >> 8) & 0xFF;
-    packet[8] = pkt_len_field & 0xFF;
-    
-    // Data
-    for (size_t i = 0; i < chunk_size; i++) {
-      packet[9 + i] = template_data[written + i];
+    // Read acknowledgment
+    Adafruit_Fingerprint_Packet ack_packet(FINGERPRINT_ACKPACKET, 0, nullptr);
+    if (this->finger_->getStructuredPacket(&ack_packet, 1000) != FINGERPRINT_OK) {
+      ESP_LOGW(TAG, "No acknowledgment for DOWNCHAR to buffer %d", buffer_id);
+      return false;
     }
     
-    // Checksum: sum of type + length_high + length_low + data bytes
-    uint16_t checksum = packet[6] + packet[7] + packet[8];
-    for (size_t i = 0; i < chunk_size; i++) {
-      checksum += packet[9 + i];
+    if (ack_packet.type != FINGERPRINT_ACKPACKET || ack_packet.data[0] != FINGERPRINT_OK) {
+      ESP_LOGW(TAG, "DOWNCHAR to buffer %d failed: type=0x%02X, code=0x%02X", 
+               buffer_id, ack_packet.type, ack_packet.data[0]);
+      return false;
     }
-    packet[9 + chunk_size] = (checksum >> 8) & 0xFF;
-    packet[9 + chunk_size + 1] = checksum & 0xFF;
     
-    // Send raw packet directly to serial
-    size_t total_pkt_len = 9 + chunk_size + 2;
-    mySerial.write(packet.data(), total_pkt_len);
-    mySerial.flush();
+    ESP_LOGD(TAG, "Buffer %d ready to receive data", buffer_id);
+    delay(50);
     
-    // Log packet info for debugging
-    ESP_LOGI(TAG, "Upload PKT%d: type=0x%02X, data_len=%d, checksum=0x%04X, first_data=%02X %02X %02X %02X",
-             pkt_num, packet[6], (int)chunk_size, checksum,
-             packet[9], packet[10], packet[11], packet[12]);
+    // Flush any extra bytes
+    while (mySerial.available()) mySerial.read();
     
-    written += chunk_size;
-    delay(20);  // Small delay between packets
-  }
-  
-  // Wait for sensor to process the data
-  delay(100);
-  
-  // Check if sensor sent any response after receiving data
-  // Some sensors send an ACK after the end data packet
-  int avail = mySerial.available();
-  if (avail > 0) {
-    ESP_LOGD(TAG, "Sensor sent %d bytes after data transfer", avail);
-    uint8_t resp[20];
-    int resp_len = 0;
-    while (mySerial.available() && resp_len < 20) {
-      resp[resp_len++] = mySerial.read();
+    // Send data packets
+    const uint32_t addr = 0xFFFFFFFF;
+    size_t total_size = data.size();
+    size_t written = 0;
+    int pkt_num = 0;
+    std::vector<uint8_t> packet(9 + packet_len + 2);
+    
+    while (written < total_size) {
+      size_t remaining = total_size - written;
+      size_t chunk_size = (remaining < packet_len) ? remaining : packet_len;
+      bool is_last = (written + chunk_size >= total_size);
+      pkt_num++;
+      
+      // Header: 0xEF01
+      packet[0] = 0xEF;
+      packet[1] = 0x01;
+      
+      // Address (4 bytes, big-endian)
+      packet[2] = (addr >> 24) & 0xFF;
+      packet[3] = (addr >> 16) & 0xFF;
+      packet[4] = (addr >> 8) & 0xFF;
+      packet[5] = addr & 0xFF;
+      
+      // Packet type: 0x02 for data, 0x08 for end data
+      packet[6] = is_last ? FINGERPRINT_ENDDATAPACKET : FINGERPRINT_DATAPACKET;
+      
+      // Length: data bytes + 2 checksum bytes
+      uint16_t pkt_len_field = chunk_size + 2;
+      packet[7] = (pkt_len_field >> 8) & 0xFF;
+      packet[8] = pkt_len_field & 0xFF;
+      
+      // Data
+      for (size_t i = 0; i < chunk_size; i++) {
+        packet[9 + i] = data[written + i];
+      }
+      
+      // Checksum: sum of type + length_high + length_low + data bytes
+      uint16_t checksum = packet[6] + packet[7] + packet[8];
+      for (size_t i = 0; i < chunk_size; i++) {
+        checksum += packet[9 + i];
+      }
+      packet[9 + chunk_size] = (checksum >> 8) & 0xFF;
+      packet[9 + chunk_size + 1] = checksum & 0xFF;
+      
+      // Send packet
+      size_t total_pkt_len = 9 + chunk_size + 2;
+      mySerial.write(packet.data(), total_pkt_len);
+      mySerial.flush();
+      
+      if (buffer_id == 1) {  // Only log for first buffer to avoid spam
+        ESP_LOGI(TAG, "Upload PKT%d: type=0x%02X, data_len=%d, checksum=0x%04X", 
+                 pkt_num, packet[6], (int)chunk_size, checksum);
+      }
+      
+      written += chunk_size;
+      delay(20);
     }
-    // Log first few bytes
-    if (resp_len >= 10) {
-      ESP_LOGD(TAG, "Response: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-               resp[0], resp[1], resp[2], resp[3], resp[4], resp[5], resp[6], resp[7], resp[8], resp[9]);
-      // Check if it's an ACK packet with error code
+    
+    // Wait for sensor to process
+    delay(100);
+    
+    // Check for ACK after data transfer (some sensors send one)
+    if (mySerial.available() >= 12) {
+      uint8_t resp[12];
+      for (int i = 0; i < 12; i++) resp[i] = mySerial.read();
       if (resp[0] == 0xEF && resp[1] == 0x01 && resp[6] == 0x07) {
-        // ACK packet, byte 9 is the confirmation code
-        ESP_LOGD(TAG, "Received ACK with code: 0x%02X", resp[9]);
-        if (resp[9] != 0x00) {
-          ESP_LOGW(TAG, "Sensor rejected template data with error: 0x%02X", resp[9]);
-          this->mode_ = previous_mode;
+        uint8_t code = resp[9];
+        ESP_LOGD(TAG, "Buffer %d upload ACK: 0x%02X", buffer_id, code);
+        if (code != 0x00) {
+          ESP_LOGW(TAG, "Buffer %d upload rejected with code: 0x%02X", buffer_id, code);
           return false;
         }
       }
     }
-  } else {
-    ESP_LOGD(TAG, "No response from sensor after data transfer");
+    
+    // Flush remaining
+    while (mySerial.available()) mySerial.read();
+    
+    return true;
+  };
+
+  // Step 1: Upload template to CharBuffer 1
+  ESP_LOGI(TAG, "Step 1: Uploading template to CharBuffer 1");
+  if (!upload_to_buffer(0x01, template_data)) {
+    ESP_LOGW(TAG, "Failed to upload to CharBuffer 1");
+    this->mode_ = previous_mode;
+    return false;
   }
   
-  // Wait for sensor to fully process the template data
-  delay(200);
+  delay(100);
   
-  // Flush any response from sensor that might have arrived
-  while (mySerial.available()) {
-    mySerial.read();
+  // Step 2: Upload SAME template to CharBuffer 2
+  ESP_LOGI(TAG, "Step 2: Uploading template to CharBuffer 2");
+  if (!upload_to_buffer(0x02, template_data)) {
+    ESP_LOGW(TAG, "Failed to upload to CharBuffer 2");
+    this->mode_ = previous_mode;
+    return false;
   }
   
-  // First, try to delete any existing template at this ID (optional but safe)
-  ESP_LOGD(TAG, "Deleting any existing template at ID %d before storing", id);
+  delay(100);
+  
+  // Step 3: Call createModel() to merge the two buffers into a template
+  ESP_LOGI(TAG, "Step 3: Calling createModel() to merge buffers");
+  while (mySerial.available()) mySerial.read();
+  uint8_t create_result = this->finger_->createModel();
+  ESP_LOGI(TAG, "createModel() returned: 0x%02X", create_result);
+  
+  if (create_result != FINGERPRINT_OK) {
+    ESP_LOGW(TAG, "createModel() failed with code: 0x%02X", create_result);
+    // Don't fail here - still try to store, some sensors may not need createModel for identical buffers
+  }
+  
+  delay(100);
+  while (mySerial.available()) mySerial.read();
+  
+  // Step 4: Delete any existing template at this ID
+  ESP_LOGD(TAG, "Step 4: Deleting any existing template at ID %d", id);
   uint8_t del_result = this->finger_->deleteModel(id);
   ESP_LOGD(TAG, "deleteModel(%d) returned: %d", id, del_result);
   delay(100);
+  while (mySerial.available()) mySerial.read();
   
-  // Flush again after delete
-  while (mySerial.available()) {
-    mySerial.read();
-  }
+  // Step 5: Store the template to flash
+  ESP_LOGI(TAG, "Step 5: Storing template to ID %d", id);
+  uint8_t result = this->finger_->storeModel(id);  // Uses buffer 1 by default
+  ESP_LOGI(TAG, "storeModel(%d) returned: 0x%02X", id, result);
   
-  ESP_LOGD(TAG, "Attempting to store template to flash at ID %d from buffer 2", id);
-  
-  // Store the template from buffer 2 to flash (custom command since we used buffer 2)
-  // STORE command format: 0x06, buffer_id, id_high, id_low
-  // Try multiple times with increasing delays
-  uint8_t result = FINGERPRINT_PACKETRECIEVEERR;
-  for (int attempt = 1; attempt <= 3 && result != FINGERPRINT_OK; attempt++) {
-    if (attempt > 1) {
-      ESP_LOGI(TAG, "Retry attempt %d for store...", attempt);
-      delay(200 * attempt);  // Increasing delay
-      // Flush serial before retry
-      while (mySerial.available()) mySerial.read();
-    }
+  // If failed, try buffer 2
+  if (result != FINGERPRINT_OK) {
+    ESP_LOGI(TAG, "Buffer 1 store failed, trying buffer 2...");
+    delay(100);
+    while (mySerial.available()) mySerial.read();
     
-    // Send custom STORE command to store from buffer 2
-    uint8_t store_cmd[] = {0x06, 0x02, (uint8_t)(id >> 8), (uint8_t)(id & 0xFF)};  // 0x02 = buffer 2
+    uint8_t store_cmd[] = {0x06, 0x02, (uint8_t)(id >> 8), (uint8_t)(id & 0xFF)};
     Adafruit_Fingerprint_Packet store_pkt(FINGERPRINT_COMMANDPACKET, sizeof(store_cmd), store_cmd);
     this->finger_->writeStructuredPacket(store_pkt);
     
-    // Read response
     Adafruit_Fingerprint_Packet resp_pkt(FINGERPRINT_ACKPACKET, 0, nullptr);
     if (this->finger_->getStructuredPacket(&resp_pkt, 1000) == FINGERPRINT_OK) {
       result = resp_pkt.data[0];
-    } else {
-      result = FINGERPRINT_PACKETRECIEVEERR;
     }
-    ESP_LOGI(TAG, "storeModel(id=%d, buf=2) attempt %d returned: 0x%02X", id, attempt, result);
-  }
-  
-  // If buffer 2 fails, try buffer 1 (maybe our upload went there despite the command?)
-  if (result != FINGERPRINT_OK) {
-    ESP_LOGI(TAG, "Buffer 2 failed, trying buffer 1...");
-    delay(100);
-    result = this->finger_->storeModel(id);  // Uses buffer 1
-    ESP_LOGI(TAG, "storeModel(id=%d, buf=1) returned: 0x%02X", id, result);
-  }
-  
-  // If still failing, try a different ID
-  if (result != FINGERPRINT_OK) {
-    this->finger_->getTemplateCount();
-    uint16_t next_id = (this->finger_->templateCount > 0) ? (this->finger_->templateCount + 1) : 1;
-    if (next_id != id) {  // Only try if different from original
-      ESP_LOGW(TAG, "Failed to store at ID %d, trying next free ID %d...", id, next_id);
-      delay(100);
-      result = this->finger_->storeModel(next_id);
-      ESP_LOGI(TAG, "storeModel(%d) returned: 0x%02X", next_id, result);
-      if (result == FINGERPRINT_OK) {
-        id = next_id;  // Use the ID that worked
-      }
-    }
+    ESP_LOGI(TAG, "storeModel(id=%d, buf=2) returned: 0x%02X", id, result);
   }
   
   if (result != FINGERPRINT_OK) {
-    // Decode error for better debugging
     const char* error_desc = "unknown";
     switch (result) {
       case 0x01: error_desc = "PACKETRECIEVEERR"; break;
@@ -962,31 +942,6 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
       case 0x18: error_desc = "FLASHERR"; break;
     }
     ESP_LOGW(TAG, "Failed to store template at ID %d: error 0x%02X (%s)", id, result, error_desc);
-    
-    // Try to read back what's in the buffer to debug
-    ESP_LOGD(TAG, "Trying getModel() to check buffer contents...");
-    uint8_t check = this->finger_->getModel();
-    ESP_LOGD(TAG, "getModel() returned: %d", check);
-    
-    if (check == FINGERPRINT_OK) {
-      // Read the first packet to see what's actually in the buffer
-      delay(100);
-      uint8_t buf[20];
-      int got = 0;
-      uint32_t t = millis();
-      while (got < 20 && millis() - t < 500) {
-        if (mySerial.available()) {
-          buf[got++] = mySerial.read();
-        }
-      }
-      if (got >= 12) {
-        ESP_LOGI(TAG, "Buffer readback first 12 bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-                 buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11]);
-      }
-      // Flush rest
-      while (mySerial.available()) mySerial.read();
-    }
-    
     this->mode_ = previous_mode;
     return false;
   }
