@@ -617,7 +617,6 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
   }
   
   // Load template from flash into character buffer
-  // According to R503 manual, this loads the FULL 1536-byte template
   uint8_t result = this->finger_->loadModel(id);
   if (result != FINGERPRINT_OK) {
     ESP_LOGW(TAG, "Failed to load template %d: error %d", id, result);
@@ -628,7 +627,6 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
   ESP_LOGI(TAG, "Template %d loaded, requesting data transfer...", id);
   
   // Request template data transfer using UPCHAR command (getModel)
-  // After LoadChar loads a template, UpChar will send the FULL 1536 bytes
   result = this->finger_->getModel();
   if (result != FINGERPRINT_OK) {
     ESP_LOGW(TAG, "Failed to start template transfer: error %d", result);
@@ -637,50 +635,104 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
   }
   
   // R503 template = 1536 bytes, sent in packets
-  // With 128-byte packet data size: 1536 / 128 = 12 packets
+  // With 128-byte packet data: 1536 / 128 = 12 packets
+  // Each packet: 2 (start) + 4 (addr) + 1 (type) + 2 (len) + 128 (data) + 2 (checksum) = 139 bytes
   const int PACKET_DATA_SIZE = 128;
-  const int TEMPLATE_SIZE = 1536;
-  const int NUM_PACKETS = TEMPLATE_SIZE / PACKET_DATA_SIZE;  // 12 packets
+  const int PACKET_OVERHEAD = 11;  // 2+4+1+2+2
+  const int MAX_TEMPLATE_SIZE = 1536;
+  const int MAX_PACKETS = MAX_TEMPLATE_SIZE / PACKET_DATA_SIZE;  // 12
   
   template_data.clear();
-  template_data.reserve(TEMPLATE_SIZE);
+  template_data.reserve(MAX_TEMPLATE_SIZE);
   
-  ESP_LOGI(TAG, "Reading %d bytes (%d packets)...", TEMPLATE_SIZE, NUM_PACKETS);
+  ESP_LOGI(TAG, "Reading template data (expecting up to %d packets)...", MAX_PACKETS);
   
-  // Read packets until we get ENDDATAPACKET or timeout
+  // Read packets by parsing raw serial data
   uint32_t start_time = millis();
   const uint32_t TIMEOUT_MS = 10000;
   int packets_read = 0;
   bool end_received = false;
   
-  while (!end_received && (millis() - start_time < TIMEOUT_MS)) {
-    // Read packet using structured packet reader
-    Adafruit_Fingerprint_Packet data_pkt(FINGERPRINT_DATAPACKET, 0, nullptr);
-    if (this->finger_->getStructuredPacket(&data_pkt, 2000) != FINGERPRINT_OK) {
-      ESP_LOGW(TAG, "Timeout reading packet %d", packets_read + 1);
+  while (!end_received && packets_read < MAX_PACKETS && (millis() - start_time < TIMEOUT_MS)) {
+    // Wait for packet start code 0xEF01
+    bool found_start = false;
+    uint32_t pkt_start_time = millis();
+    
+    while (!found_start && (millis() - pkt_start_time < 2000)) {
+      if (mySerial.available() >= 2) {
+        uint8_t b1 = mySerial.read();
+        if (b1 == 0xEF) {
+          uint8_t b2 = mySerial.peek();
+          if (b2 == 0x01) {
+            mySerial.read();  // consume 0x01
+            found_start = true;
+          }
+        }
+      }
+    }
+    
+    if (!found_start) {
+      ESP_LOGW(TAG, "Timeout waiting for packet %d start code", packets_read + 1);
+      break;
+    }
+    
+    // Read rest of header: 4 (addr) + 1 (type) + 2 (len) = 7 bytes
+    uint8_t header[7];
+    int header_read = 0;
+    uint32_t header_start = millis();
+    
+    while (header_read < 7 && (millis() - header_start < 1000)) {
+      if (mySerial.available()) {
+        header[header_read++] = mySerial.read();
+      }
+    }
+    
+    if (header_read < 7) {
+      ESP_LOGW(TAG, "Timeout reading packet %d header (got %d bytes)", packets_read + 1, header_read);
+      break;
+    }
+    
+    uint8_t pkt_type = header[4];
+    uint16_t pkt_len = (header[5] << 8) | header[6];  // includes 2-byte checksum
+    uint16_t data_len = (pkt_len > 2) ? (pkt_len - 2) : 0;
+    
+    if (data_len > 256) {
+      ESP_LOGW(TAG, "Invalid packet %d data length: %d", packets_read + 1, data_len);
+      break;
+    }
+    
+    // Read data + checksum
+    uint8_t payload[258];  // max 256 data + 2 checksum
+    int payload_read = 0;
+    uint32_t payload_start = millis();
+    
+    while (payload_read < pkt_len && (millis() - payload_start < 1000)) {
+      if (mySerial.available()) {
+        payload[payload_read++] = mySerial.read();
+      }
+    }
+    
+    if (payload_read < pkt_len) {
+      ESP_LOGW(TAG, "Timeout reading packet %d payload (got %d/%d bytes)", 
+               packets_read + 1, payload_read, pkt_len);
       break;
     }
     
     packets_read++;
     
-    // Check packet type
-    if (data_pkt.type == FINGERPRINT_ENDDATAPACKET) {
-      end_received = true;
-      ESP_LOGD(TAG, "Received end packet (%d)", packets_read);
-    } else if (data_pkt.type != FINGERPRINT_DATAPACKET) {
-      ESP_LOGW(TAG, "Unexpected packet type 0x%02X at packet %d", data_pkt.type, packets_read);
-    }
-    
-    // Extract data from packet (length field includes 2-byte checksum)
-    uint16_t data_len = data_pkt.length > 2 ? data_pkt.length - 2 : 0;
-    if (data_len > PACKET_DATA_SIZE) data_len = PACKET_DATA_SIZE;
-    
+    // Extract data bytes (exclude checksum)
     for (uint16_t i = 0; i < data_len; i++) {
-      template_data.push_back(data_pkt.data[i]);
+      template_data.push_back(payload[i]);
     }
     
-    ESP_LOGD(TAG, "Packet %d: type=0x%02X, len=%d, total=%d bytes", 
-             packets_read, data_pkt.type, data_len, (int)template_data.size());
+    ESP_LOGD(TAG, "Packet %d: type=0x%02X, data_len=%d, total=%d bytes", 
+             packets_read, pkt_type, data_len, (int)template_data.size());
+    
+    // Check for end packet
+    if (pkt_type == FINGERPRINT_ENDDATAPACKET) {
+      end_received = true;
+      ESP_LOGD(TAG, "Received end packet");
+    }
   }
   
   ESP_LOGI(TAG, "Downloaded template %d: %d bytes in %d packets", 
