@@ -638,9 +638,17 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
     return false;
   }
   
-  // Read raw bytes from serial - template is 512 bytes sent in 2 packets of 256 bytes each
-  // Each packet: 12 bytes header/overhead + 256 bytes data = ~534 total bytes for both packets
-  // Packet structure: 2-byte start, 4-byte addr, 1-byte type, 2-byte length, N-byte data, 2-byte checksum
+  // Read raw bytes from serial - template is 512 bytes
+  // Sensor sends 128-byte data packets (based on sensor's packet_len setting)
+  // Each packet: 9 bytes header + 128 bytes data + 2 bytes checksum = 139 bytes
+  // 4 packets needed for 512 bytes = 556 total bytes
+  // Packet structure: 2-byte start (EF01), 4-byte addr, 1-byte type, 2-byte length, N-byte data, 2-byte checksum
+  const int PACKET_DATA_SIZE = 128;
+  const int PACKET_OVERHEAD = 11;  // 9 header + 2 checksum
+  const int PACKET_SIZE = PACKET_DATA_SIZE + PACKET_OVERHEAD;  // 139 bytes
+  const int NUM_PACKETS = 4;
+  const int TOTAL_BYTES = PACKET_SIZE * NUM_PACKETS;  // 556 bytes
+  
   uint8_t raw_data[600];
   memset(raw_data, 0xff, sizeof(raw_data));
   
@@ -648,47 +656,52 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
   const uint32_t TIMEOUT_MS = 5000;
   int idx = 0;
   
-  while (idx < 534 && (millis() - start_time < TIMEOUT_MS)) {
+  while (idx < TOTAL_BYTES && (millis() - start_time < TIMEOUT_MS)) {
     if (mySerial.available()) {
       raw_data[idx++] = mySerial.read();
     }
   }
   
-  ESP_LOGD(TAG, "Read %d raw bytes from sensor", idx);
+  ESP_LOGD(TAG, "Read %d raw bytes from sensor (expected %d)", idx, TOTAL_BYTES);
   
-  // Log the first packet header for debugging (first 12 bytes)
+  // Log first packet header for debugging
   if (idx >= 12) {
     ESP_LOGI(TAG, "Download PKT1 header: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
              raw_data[0], raw_data[1], raw_data[2], raw_data[3], raw_data[4], raw_data[5],
              raw_data[6], raw_data[7], raw_data[8], raw_data[9], raw_data[10], raw_data[11]);
   }
-  // Log second packet header (starts at byte 267)
-  if (idx >= 279) {
-    ESP_LOGI(TAG, "Download PKT2 header: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-             raw_data[267], raw_data[268], raw_data[269], raw_data[270], raw_data[271], raw_data[272],
-             raw_data[273], raw_data[274], raw_data[275], raw_data[276], raw_data[277], raw_data[278]);
-  }
   
-  if (idx < 534) {
-    ESP_LOGW(TAG, "Timeout reading template data, only got %d bytes", idx);
+  if (idx < TOTAL_BYTES) {
+    ESP_LOGW(TAG, "Timeout reading template data, only got %d bytes (expected %d)", idx, TOTAL_BYTES);
     this->mode_ = previous_mode;
     return false;
   }
   
-  // Extract template data from packets
-  // Packet format: 0xEF01 (2) + addr (4) + type (1) + length (2) + data (256) + checksum (2) = 267 bytes per packet
+  // Extract template data from 4 packets of 128 bytes each
   template_data.clear();
   template_data.reserve(512);
   
-  // First packet data starts at byte 9 (after header)
-  for (int i = 0; i < 256; i++) {
-    template_data.push_back(raw_data[9 + i]);
+  for (int pkt = 0; pkt < NUM_PACKETS; pkt++) {
+    int pkt_start = pkt * PACKET_SIZE;
+    int data_start = pkt_start + 9;  // Skip 9-byte header
+    
+    // Verify packet header
+    if (raw_data[pkt_start] != 0xEF || raw_data[pkt_start + 1] != 0x01) {
+      ESP_LOGW(TAG, "Invalid packet %d header at byte %d: %02X %02X", 
+               pkt + 1, pkt_start, raw_data[pkt_start], raw_data[pkt_start + 1]);
+    }
+    
+    // Extract 128 bytes of data from this packet
+    for (int i = 0; i < PACKET_DATA_SIZE; i++) {
+      template_data.push_back(raw_data[data_start + i]);
+    }
   }
   
-  // Second packet data starts at byte 9 + 256 + 2 (checksum) + 9 (next header) = 276
-  for (int i = 0; i < 256; i++) {
-    template_data.push_back(raw_data[276 + i]);
-  }
+  // Debug: verify no packet headers in template data
+  ESP_LOGI(TAG, "Template bytes 126-137: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+           template_data[126], template_data[127], template_data[128], template_data[129],
+           template_data[130], template_data[131], template_data[132], template_data[133],
+           template_data[134], template_data[135], template_data[136], template_data[137]);
   
   ESP_LOGI(TAG, "Downloaded template %d: %d bytes", id, template_data.size());
   this->mode_ = previous_mode;
