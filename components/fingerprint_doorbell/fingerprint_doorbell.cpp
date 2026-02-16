@@ -27,9 +27,8 @@ void FingerprintDoorbell::setup() {
     this->doorbell_pin_->digital_write(false);
   }
 
-  // Initialize exactly like original: pass Serial2 pointer to Adafruit library
+  // Initialize serial pointer (finger_ object created in connect_sensor with correct password)
   this->hw_serial_ = &mySerial;
-  this->finger_ = new Adafruit_Fingerprint(this->hw_serial_);
   
   ESP_LOGI(TAG, "Using Serial2 with default pins (RX=GPIO16, TX=GPIO17)");
   this->sensor_connected_ = false;
@@ -167,32 +166,30 @@ void FingerprintDoorbell::dump_config() {
 
 bool FingerprintDoorbell::connect_sensor() {
   ESP_LOGI(TAG, "Connecting to fingerprint sensor (attempt %d)...", this->connect_attempts_ + 1);
-  
-  if (this->finger_ == nullptr) {
-    ESP_LOGE(TAG, "Fingerprint object not initialized!");
-    return false;
-  }
 
   // Only initialize serial and load password on first attempt
   if (this->connect_attempts_ == 0) {
     // Load stored password from preferences
     this->load_sensor_password();
     
-    // If paired, set the password for verification
-    if (this->sensor_paired_) {
-      this->finger_->thePassword = this->sensor_password_;
-      ESP_LOGI(TAG, "Using stored password for paired sensor");
-    } else {
-      // Use default password for unpaired sensor
-      this->finger_->thePassword = 0x00000000;
-      ESP_LOGI(TAG, "Using default password (sensor unpaired)");
-    }
-    
     // Explicitly initialize Serial2 with pins for ESP-IDF framework
     // RX=GPIO16, TX=GPIO17 are the default Serial2 pins on ESP32
     mySerial.begin(57600, SERIAL_8N1, 16, 17);
     delay(100);  // Give serial time to initialize
     App.feed_wdt();
+    
+    // Create Adafruit_Fingerprint with the appropriate password
+    uint32_t password = this->sensor_paired_ ? this->sensor_password_ : 0x00000000;
+    if (this->finger_ != nullptr) {
+      delete this->finger_;
+    }
+    this->finger_ = new Adafruit_Fingerprint(this->hw_serial_, password);
+    
+    if (this->sensor_paired_) {
+      ESP_LOGI(TAG, "Using stored password for paired sensor");
+    } else {
+      ESP_LOGI(TAG, "Using default password (sensor unpaired)");
+    }
     
     // Now tell Adafruit library what baud rate we're using
     this->finger_->begin(57600);
@@ -1074,8 +1071,12 @@ bool FingerprintDoorbell::pair_sensor(uint32_t password) {
     return false;
   }
   
+  // Recreate finger object with new password for future communications
+  delete this->finger_;
+  this->finger_ = new Adafruit_Fingerprint(this->hw_serial_, password);
+  this->finger_->begin(57600);
+  
   // Update our stored password to match
-  this->finger_->thePassword = password;
   this->sensor_password_ = password;
   this->sensor_paired_ = true;
   this->save_sensor_password();
@@ -1100,8 +1101,12 @@ bool FingerprintDoorbell::unpair_sensor() {
     return false;
   }
   
+  // Recreate finger object with default password
+  delete this->finger_;
+  this->finger_ = new Adafruit_Fingerprint(this->hw_serial_, 0x00000000);
+  this->finger_->begin(57600);
+  
   // Update our state
-  this->finger_->thePassword = 0x00000000;
   this->sensor_password_ = 0xFFFFFFFF;  // Marker for "unpaired"
   this->sensor_paired_ = false;
   this->save_sensor_password();
