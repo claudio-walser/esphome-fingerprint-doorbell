@@ -656,6 +656,19 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
   
   ESP_LOGD(TAG, "Read %d raw bytes from sensor", idx);
   
+  // Log the first packet header for debugging (first 12 bytes)
+  if (idx >= 12) {
+    ESP_LOGI(TAG, "Download PKT1 header: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+             raw_data[0], raw_data[1], raw_data[2], raw_data[3], raw_data[4], raw_data[5],
+             raw_data[6], raw_data[7], raw_data[8], raw_data[9], raw_data[10], raw_data[11]);
+  }
+  // Log second packet header (starts at byte 267)
+  if (idx >= 279) {
+    ESP_LOGI(TAG, "Download PKT2 header: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+             raw_data[267], raw_data[268], raw_data[269], raw_data[270], raw_data[271], raw_data[272],
+             raw_data[273], raw_data[274], raw_data[275], raw_data[276], raw_data[277], raw_data[278]);
+  }
+  
   if (idx < 534) {
     ESP_LOGW(TAG, "Timeout reading template data, only got %d bytes", idx);
     this->mode_ = previous_mode;
@@ -707,6 +720,13 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   // The FPM library uses this approach for uploads even though downloads come in 256-byte packets
   const uint16_t packet_len = 128;
   ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes, using %d-byte packets)", id, template_data.size(), packet_len);
+  
+  // Log first 16 bytes of template for debugging
+  ESP_LOGI(TAG, "Template data first 16 bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+           template_data[0], template_data[1], template_data[2], template_data[3],
+           template_data[4], template_data[5], template_data[6], template_data[7],
+           template_data[8], template_data[9], template_data[10], template_data[11],
+           template_data[12], template_data[13], template_data[14], template_data[15]);
   
   // Send download command (0x09) - tells sensor to receive template into buffer 1
   uint8_t cmd_data[] = {FINGERPRINT_DOWNLOAD, 0x01};  // Download to char buffer 1
@@ -782,8 +802,10 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     mySerial.write(packet.data(), total_pkt_len);
     mySerial.flush();
     
-    ESP_LOGD(TAG, "Sent packet %d/%d (%d bytes, type=0x%02X, checksum=0x%04X)", 
-             pkt_num, num_packets, (int)chunk_size, packet[6], checksum);
+    // Log full packet header for debugging (first 12 bytes)
+    ESP_LOGI(TAG, "Upload PKT%d header: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X (total=%d)",
+             pkt_num, packet[0], packet[1], packet[2], packet[3], packet[4], packet[5],
+             packet[6], packet[7], packet[8], packet[9], packet[10], packet[11], (int)total_pkt_len);
     
     written += chunk_size;
     delay(20);  // Small delay between packets
