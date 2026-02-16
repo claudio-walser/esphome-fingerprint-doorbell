@@ -868,35 +868,45 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     return true;
   };
 
-  // Step 1: Upload template to CharBuffer 1
-  ESP_LOGI(TAG, "Step 1: Uploading template to CharBuffer 1");
-  if (!upload_to_buffer(0x01, template_data)) {
-    ESP_LOGW(TAG, "Failed to upload to CharBuffer 1");
+  // A 512-byte template consists of two 256-byte feature files.
+  // We need to upload each half to a separate buffer, then createModel merges them.
+  // Split the template: first 256 bytes -> CharBuffer1, second 256 bytes -> CharBuffer2
+  std::vector<uint8_t> feature1(template_data.begin(), template_data.begin() + 256);
+  std::vector<uint8_t> feature2(template_data.begin() + 256, template_data.end());
+  
+  ESP_LOGI(TAG, "Split template: feature1[0-3]=%02X %02X %02X %02X, feature2[0-3]=%02X %02X %02X %02X",
+           feature1[0], feature1[1], feature1[2], feature1[3],
+           feature2[0], feature2[1], feature2[2], feature2[3]);
+  
+  // Step 1: Upload first 256 bytes (feature 1) to CharBuffer 1
+  ESP_LOGI(TAG, "Step 1: Uploading feature 1 (256 bytes) to CharBuffer 1");
+  if (!upload_to_buffer(0x01, feature1)) {
+    ESP_LOGW(TAG, "Failed to upload feature 1 to CharBuffer 1");
     this->mode_ = previous_mode;
     return false;
   }
   
   delay(100);
   
-  // Step 2: Upload SAME template to CharBuffer 2
-  ESP_LOGI(TAG, "Step 2: Uploading template to CharBuffer 2");
-  if (!upload_to_buffer(0x02, template_data)) {
-    ESP_LOGW(TAG, "Failed to upload to CharBuffer 2");
+  // Step 2: Upload second 256 bytes (feature 2) to CharBuffer 2
+  ESP_LOGI(TAG, "Step 2: Uploading feature 2 (256 bytes) to CharBuffer 2");
+  if (!upload_to_buffer(0x02, feature2)) {
+    ESP_LOGW(TAG, "Failed to upload feature 2 to CharBuffer 2");
     this->mode_ = previous_mode;
     return false;
   }
   
   delay(100);
   
-  // Step 3: Call createModel() to merge the two buffers into a template
-  ESP_LOGI(TAG, "Step 3: Calling createModel() to merge buffers");
+  // Step 3: Call createModel() to merge the two feature files into a template
+  ESP_LOGI(TAG, "Step 3: Calling createModel() to merge features into template");
   while (mySerial.available()) mySerial.read();
   uint8_t create_result = this->finger_->createModel();
   ESP_LOGI(TAG, "createModel() returned: 0x%02X", create_result);
   
   if (create_result != FINGERPRINT_OK) {
-    ESP_LOGW(TAG, "createModel() failed with code: 0x%02X", create_result);
-    // Don't fail here - still try to store, some sensors may not need createModel for identical buffers
+    ESP_LOGW(TAG, "createModel() failed with code: 0x%02X (may still work if features are from same finger)", create_result);
+    // Continue anyway - if the features came from the same original template, storeModel might still work
   }
   
   delay(100);
