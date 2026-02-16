@@ -1062,28 +1062,6 @@ class FingerprintRequestHandler : public AsyncWebHandler {
   
   bool isRequestHandlerTrivial() const override { return false; }
   
-  // Handle body data in chunks - needed for large POST bodies (template import)
-  void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) override {
-    std::string url = request->url();
-    
-    // Only collect body for template import endpoint
-    if (url == "/fingerprint/template" && request->method() == HTTP_POST) {
-      // First chunk - allocate buffer
-      if (index == 0) {
-        if (total > 8192) {  // Max 8KB body
-          ESP_LOGW(TAG, "Body too large: %d bytes", total);
-          return;
-        }
-        body_buffer_.clear();
-        body_buffer_.reserve(total);
-      }
-      
-      // Append data to buffer
-      body_buffer_.append(reinterpret_cast<char*>(data), len);
-      ESP_LOGD(TAG, "Body chunk: index=%d len=%d total=%d accumulated=%d", index, len, total, body_buffer_.length());
-    }
-  }
-  
   bool check_auth(AsyncWebServerRequest *request) const {
     std::string token = this->parent_->get_api_token();
     if (token.empty()) {
@@ -1244,31 +1222,26 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     }
     
     // POST /fingerprint/template - Import fingerprint template
-    // Body: JSON with id, name, template fields (template is base64 encoded)
-    // Example: {"id":1,"name":"John","template":"base64..."}
+    // Body: multipart/form-data with id, name, template fields (template is base64 encoded)
     if (url == "/fingerprint/template" && request->method() == HTTP_POST) {
-      ESP_LOGI(TAG, "Template import: body_buffer_ length=%d", body_buffer_.length());
+      // ESPHome's multipart handler parses form fields into args
+      bool has_id = request->hasArg("id");
+      bool has_name = request->hasArg("name");
+      bool has_template = request->hasArg("template");
       
-      if (body_buffer_.empty()) {
-        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Empty request body\"}");
-        body_buffer_.clear();
+      ESP_LOGI(TAG, "Template import: hasArg id=%d name=%d template=%d", has_id, has_name, has_template);
+      
+      if (!has_id || !has_name || !has_template) {
+        ESP_LOGW(TAG, "Import request missing form fields");
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id, name, or template field\"}");
         return;
       }
       
-      // Parse JSON manually (avoid external dependencies)
-      std::string id_str = this->extract_json_string(body_buffer_, "id");
-      std::string name = this->extract_json_string(body_buffer_, "name");
-      std::string template_base64 = this->extract_json_string(body_buffer_, "template");
-      
-      if (id_str.empty() || name.empty() || template_base64.empty()) {
-        ESP_LOGW(TAG, "Import request missing JSON fields: id='%s' name='%s' template_len=%d",
-                 id_str.c_str(), name.c_str(), template_base64.length());
-        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id, name, or template in JSON body\"}");
-        body_buffer_.clear();
-        return;
-      }
-      
+      std::string id_str = request->arg("id");
+      std::string name = request->arg("name");
+      std::string template_base64 = request->arg("template");
       uint16_t id = std::atoi(id_str.c_str());
+      
       ESP_LOGI(TAG, "Import request: id=%d name='%s' template_len=%d", id, name.c_str(), template_base64.length());
       
       // Decode base64
@@ -1277,16 +1250,12 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       if (template_data.empty()) {
         ESP_LOGW(TAG, "Failed to decode base64 template (len=%d)", template_base64.length());
         this->send_cors_response(request, 400, "application/json", "{\"error\":\"Invalid base64 template data\"}");
-        body_buffer_.clear();
         return;
       }
       
       ESP_LOGI(TAG, "Decoded template: %d bytes", template_data.size());
       
-      bool success = this->parent_->upload_template(id, name, template_data);
-      body_buffer_.clear();  // Clear buffer after use
-      
-      if (success) {
+      if (this->parent_->upload_template(id, name, template_data)) {
         std::string response = "{\"status\":\"imported\",\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
         this->send_cors_response(request, 200, "application/json", response);
       } else {
@@ -1362,46 +1331,8 @@ class FingerprintRequestHandler : public AsyncWebHandler {
     return result;
   }
   
-  // Simple JSON string value extractor
-  // Handles: "key":"value" and "key":number
-  std::string extract_json_string(const std::string &json, const std::string &key) const {
-    std::string search_key = "\"" + key + "\":";
-    size_t pos = json.find(search_key);
-    if (pos == std::string::npos) return "";
-    
-    pos += search_key.length();
-    
-    // Skip whitespace
-    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
-    
-    if (pos >= json.length()) return "";
-    
-    if (json[pos] == '"') {
-      // String value
-      pos++;  // Skip opening quote
-      std::string result;
-      while (pos < json.length() && json[pos] != '"') {
-        if (json[pos] == '\\' && pos + 1 < json.length()) {
-          pos++;  // Skip escape char, take next
-        }
-        result += json[pos];
-        pos++;
-      }
-      return result;
-    } else {
-      // Number value (for id field)
-      std::string result;
-      while (pos < json.length() && (isdigit(json[pos]) || json[pos] == '-')) {
-        result += json[pos];
-        pos++;
-      }
-      return result;
-    }
-  }
-  
  protected:
   FingerprintDoorbell *parent_;
-  std::string body_buffer_;  // Buffer for collecting POST body data
 };
 
 void FingerprintDoorbell::setup_web_server() {
