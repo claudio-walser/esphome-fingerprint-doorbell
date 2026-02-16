@@ -16,7 +16,7 @@ namespace fingerprint_doorbell {
 
 enum class ScanResult { NO_FINGER, MATCH_FOUND, NO_MATCH_FOUND, ERROR };
 enum class Mode { SCAN, ENROLL, IDLE };
-enum class EnrollStep { IDLE, WAITING_FOR_FINGER, CAPTURING, CONVERTING, WAITING_REMOVE, CREATING_MODEL, STORING, DONE, ERROR };
+enum class EnrollStep { IDLE, WAITING_FOR_FINGER, CONVERTING, WAITING_REMOVE, STORING, DONE };
 
 struct Match {
   ScanResult scan_result = ScanResult::NO_FINGER;

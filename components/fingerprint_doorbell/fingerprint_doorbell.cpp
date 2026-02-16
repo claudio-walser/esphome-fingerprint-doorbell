@@ -476,31 +476,6 @@ void FingerprintDoorbell::process_enrollment() {
       }
       break;
       
-    case EnrollStep::CREATING_MODEL:
-      result = this->finger_->createModel();
-      if (result == FINGERPRINT_OK) {
-        ESP_LOGI(TAG, "Model created successfully");
-        this->enroll_step_ = EnrollStep::STORING;
-        this->publish_enroll_status("Storing...");
-      } else if (result == FINGERPRINT_ENROLLMISMATCH) {
-        ESP_LOGW(TAG, "Fingerprints did not match");
-        this->mode_ = Mode::SCAN;
-        this->enroll_step_ = EnrollStep::IDLE;
-        this->set_led_ring_error();
-        this->publish_enroll_status("Error: prints don't match");
-        this->publish_last_action("Enrollment failed: mismatch");
-        this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
-      } else {
-        ESP_LOGW(TAG, "Error creating model: %d", result);
-        this->mode_ = Mode::SCAN;
-        this->enroll_step_ = EnrollStep::IDLE;
-        this->set_led_ring_error();
-        this->publish_enroll_status("Error creating model");
-        this->publish_last_action("Enrollment failed");
-        this->set_timeout(2000, [this]() { this->set_led_ring_ready(); });
-      }
-      break;
-      
     case EnrollStep::STORING:
       result = this->finger_->storeModel(this->enroll_id_);
       if (result == FINGERPRINT_OK) {
@@ -779,17 +754,9 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes, %d-byte packets)", 
            id, (int)template_data.size(), packet_len);
   
-  // Log first 16 bytes for debugging
-  if (template_data.size() >= 16) {
-    ESP_LOGI(TAG, "Template first 16 bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-             template_data[0], template_data[1], template_data[2], template_data[3],
-             template_data[4], template_data[5], template_data[6], template_data[7],
-             template_data[8], template_data[9], template_data[10], template_data[11],
-             template_data[12], template_data[13], template_data[14], template_data[15]);
-  }
+
   
-  // Step 1: Send DownChar command to start receiving template into buffer 1
-  ESP_LOGI(TAG, "Step 1: Sending DOWNCHAR command...");
+  // Send DownChar command to start receiving template into buffer 1
   uint8_t cmd_data[] = {FINGERPRINT_DOWNLOAD, 0x01};  // Buffer 1
   Adafruit_Fingerprint_Packet cmd_packet(FINGERPRINT_COMMANDPACKET, sizeof(cmd_data), cmd_data);
   this->finger_->writeStructuredPacket(cmd_packet);
@@ -812,8 +779,7 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   delay(10);
   while (mySerial.available()) mySerial.read();
   
-  // Step 2: Send template data in packets
-  ESP_LOGI(TAG, "Step 2: Sending %d bytes in data packets...", (int)template_data.size());
+  // Send template data in packets
   const uint32_t addr = 0xFFFFFFFF;
   size_t total_size = template_data.size();
   size_t written = 0;
@@ -867,17 +833,15 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   delay(100);
   while (mySerial.available()) mySerial.read();
   
-  // Step 3: Delete any existing template at this ID
-  ESP_LOGD(TAG, "Step 3: Deleting any existing template at ID %d", id);
-  uint8_t del_result = this->finger_->deleteModel(id);
-  ESP_LOGD(TAG, "deleteModel(%d) returned: %d", id, del_result);
+  // Delete any existing template at this ID
+  this->finger_->deleteModel(id);
+
   delay(100);
   while (mySerial.available()) mySerial.read();
   
-  // Step 4: Store the template to flash
-  ESP_LOGI(TAG, "Step 4: Storing template to ID %d", id);
+  // Store the template to flash
   uint8_t result = this->finger_->storeModel(id);
-  ESP_LOGI(TAG, "storeModel(%d) returned: 0x%02X", id, result);
+
   
   if (result != FINGERPRINT_OK) {
     const char* error_desc = "unknown";
@@ -1269,9 +1233,8 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       }
       
       // Last chunk - process the complete template
-      ESP_LOGI(TAG, "All chunks received, total base64 len=%d", import_buffer_.length());
-      
       std::vector<uint8_t> template_data = this->base64_decode(import_buffer_);
+      ESP_LOGI(TAG, "Received %d chunks, decoded %d bytes", total_chunks, (int)template_data.size());
       import_buffer_.clear();
       
       if (template_data.empty()) {
@@ -1280,53 +1243,8 @@ class FingerprintRequestHandler : public AsyncWebHandler {
         return;
       }
       
-      ESP_LOGI(TAG, "Decoded template: %d bytes", template_data.size());
-      
       if (this->parent_->upload_template(import_id_, import_name_, template_data)) {
         std::string response = "{\"status\":\"imported\",\"id\":" + std::to_string(import_id_) + ",\"name\":\"" + import_name_ + "\"}";
-        this->send_cors_response(request, 200, "application/json", response);
-      } else {
-        this->send_cors_response(request, 500, "application/json", "{\"error\":\"Failed to import template\"}");
-      }
-      return;
-    }
-    
-    // Legacy: POST /fingerprint/template?id=X&name=Y&template=Z - Import fingerprint template (single request)
-    // Kept for backwards compat but will fail with large templates due to URI length limits
-    if (url == "/fingerprint/template" && request->method() == HTTP_POST) {
-      // Get id, name, and template from query parameters
-      if (!request->hasParam("id") || !request->hasParam("name") || !request->hasParam("template")) {
-        ESP_LOGW(TAG, "Import request missing query params");
-        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing id, name, or template query parameter\"}");
-        return;
-      }
-      
-      std::string id_str = request->getParam("id")->value();
-      std::string name = request->getParam("name")->value();
-      std::string template_base64 = request->getParam("template")->value();
-      uint16_t id = std::atoi(id_str.c_str());
-      
-      ESP_LOGI(TAG, "Template import: id=%d name='%s' template_len=%d", id, name.c_str(), template_base64.length());
-      
-      if (template_base64.empty()) {
-        ESP_LOGW(TAG, "Empty template data");
-        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Empty template data\"}");
-        return;
-      }
-      
-      // Decode base64 template from query param
-      std::vector<uint8_t> template_data = this->base64_decode(template_base64);
-      
-      if (template_data.empty()) {
-        ESP_LOGW(TAG, "Failed to decode base64 template");
-        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Invalid base64 template data\"}");
-        return;
-      }
-      
-      ESP_LOGI(TAG, "Decoded template: %d bytes", template_data.size());
-      
-      if (this->parent_->upload_template(id, name, template_data)) {
-        std::string response = "{\"status\":\"imported\",\"id\":" + std::to_string(id) + ",\"name\":\"" + name + "\"}";
         this->send_cors_response(request, 200, "application/json", response);
       } else {
         this->send_cors_response(request, 500, "application/json", "{\"error\":\"Failed to import template\"}");
