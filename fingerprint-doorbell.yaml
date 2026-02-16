@@ -13,7 +13,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/claudio-walser/esphome-fingerprint-doorbell
-      ref: improve-security
+      ref: v1.1.5
     components: [ fingerprint_doorbell ]
     refresh: 0s
 esphome:
