@@ -1062,29 +1062,6 @@ class FingerprintRequestHandler : public AsyncWebHandler {
   
   bool isRequestHandlerTrivial() const override { return false; }
   
-  // Handle body data in chunks - needed for large POST bodies (template import)
-  void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) override {
-    std::string url = request->url();
-    
-    // Only collect body for template import endpoint
-    if (url.rfind("/fingerprint/template", 0) == 0 && request->method() == HTTP_POST) {
-      // First chunk - allocate buffer
-      if (index == 0) {
-        if (total > 8192) {  // Max 8KB body
-          ESP_LOGW(TAG, "Body too large: %d bytes", total);
-          return;
-        }
-        body_buffer_.clear();
-        body_buffer_.reserve(total);
-        ESP_LOGD(TAG, "Starting body collection, total=%d", total);
-      }
-      
-      // Append data to buffer
-      body_buffer_.append(reinterpret_cast<char*>(data), len);
-      ESP_LOGD(TAG, "Body chunk: index=%d len=%d total=%d accumulated=%d", index, len, total, body_buffer_.length());
-    }
-  }
-  
   bool check_auth(AsyncWebServerRequest *request) const {
     std::string token = this->parent_->get_api_token();
     if (token.empty()) {
@@ -1244,10 +1221,79 @@ class FingerprintRequestHandler : public AsyncWebHandler {
       return;
     }
     
-    // POST /fingerprint/template?id=X&name=Y - Import fingerprint template
-    // Query params: id, name
-    // Body: raw base64-encoded template data
-    if (url.rfind("/fingerprint/template", 0) == 0 && request->method() == HTTP_POST) {
+    // POST /fingerprint/template/chunk - Import fingerprint template in chunks
+    // Query params: id, chunk (0-based index), total (total chunks), data (base64 chunk)
+    // First chunk also includes: name
+    if (url == "/fingerprint/template/chunk" && request->method() == HTTP_POST) {
+      if (!request->hasParam("id") || !request->hasParam("chunk") || 
+          !request->hasParam("total") || !request->hasParam("data")) {
+        ESP_LOGW(TAG, "Chunk request missing params");
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Missing chunk parameters\"}");
+        return;
+      }
+      
+      uint16_t id = std::atoi(request->getParam("id")->value().c_str());
+      int chunk_idx = std::atoi(request->getParam("chunk")->value().c_str());
+      int total_chunks = std::atoi(request->getParam("total")->value().c_str());
+      std::string data = request->getParam("data")->value();
+      
+      ESP_LOGD(TAG, "Chunk %d/%d for id=%d, data_len=%d", chunk_idx + 1, total_chunks, id, data.length());
+      
+      // First chunk - initialize buffer and store name
+      if (chunk_idx == 0) {
+        if (!request->hasParam("name")) {
+          this->send_cors_response(request, 400, "application/json", "{\"error\":\"First chunk must include name\"}");
+          return;
+        }
+        import_id_ = id;
+        import_name_ = request->getParam("name")->value();
+        import_buffer_.clear();
+        import_buffer_.reserve(total_chunks * 500);  // Approximate size
+        ESP_LOGI(TAG, "Starting chunked import: id=%d name='%s' chunks=%d", id, import_name_.c_str(), total_chunks);
+      }
+      
+      // Verify this chunk is for the current import
+      if (id != import_id_) {
+        ESP_LOGW(TAG, "Chunk id mismatch: expected %d, got %d", import_id_, id);
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Chunk id mismatch\"}");
+        return;
+      }
+      
+      // Append chunk data
+      import_buffer_ += data;
+      
+      // If not last chunk, just acknowledge
+      if (chunk_idx < total_chunks - 1) {
+        this->send_cors_response(request, 200, "application/json", "{\"status\":\"chunk_received\"}");
+        return;
+      }
+      
+      // Last chunk - process the complete template
+      ESP_LOGI(TAG, "All chunks received, total base64 len=%d", import_buffer_.length());
+      
+      std::vector<uint8_t> template_data = this->base64_decode(import_buffer_);
+      import_buffer_.clear();
+      
+      if (template_data.empty()) {
+        ESP_LOGW(TAG, "Failed to decode base64 template");
+        this->send_cors_response(request, 400, "application/json", "{\"error\":\"Invalid base64 template data\"}");
+        return;
+      }
+      
+      ESP_LOGI(TAG, "Decoded template: %d bytes", template_data.size());
+      
+      if (this->parent_->upload_template(import_id_, import_name_, template_data)) {
+        std::string response = "{\"status\":\"imported\",\"id\":" + std::to_string(import_id_) + ",\"name\":\"" + import_name_ + "\"}";
+        this->send_cors_response(request, 200, "application/json", response);
+      } else {
+        this->send_cors_response(request, 500, "application/json", "{\"error\":\"Failed to import template\"}");
+      }
+      return;
+    }
+    
+    // Legacy: POST /fingerprint/template?id=X&name=Y&template=Z - Import fingerprint template (single request)
+    // Kept for backwards compat but will fail with large templates due to URI length limits
+    if (url == "/fingerprint/template" && request->method() == HTTP_POST) {
       // Get id, name, and template from query parameters
       if (!request->hasParam("id") || !request->hasParam("name") || !request->hasParam("template")) {
         ESP_LOGW(TAG, "Import request missing query params");
@@ -1357,7 +1403,11 @@ class FingerprintRequestHandler : public AsyncWebHandler {
   
  protected:
   FingerprintDoorbell *parent_;
-  std::string body_buffer_;  // Buffer for collecting POST body data
+  
+  // Chunked import state
+  uint16_t import_id_{0};
+  std::string import_name_;
+  std::string import_buffer_;
 };
 
 void FingerprintDoorbell::setup_web_server() {
