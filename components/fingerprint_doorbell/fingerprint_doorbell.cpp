@@ -741,8 +741,11 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
            template_data[8], template_data[9], template_data[10], template_data[11],
            template_data[12], template_data[13], template_data[14], template_data[15]);
   
-  // Send download command (0x09) - tells sensor to receive template into buffer 1
-  uint8_t cmd_data[] = {FINGERPRINT_DOWNLOAD, 0x01};  // Download to char buffer 1
+  // Send download command (0x09) - tells sensor to receive template into buffer
+  // Try buffer 2 (0x02) since storeModel reads from buffer 1 - maybe there's interaction
+  uint8_t buffer_id = 0x01;  // Start with buffer 1
+  ESP_LOGD(TAG, "Sending DOWNCHAR command to buffer %d", buffer_id);
+  uint8_t cmd_data[] = {FINGERPRINT_DOWNLOAD, buffer_id};
   Adafruit_Fingerprint_Packet cmd_packet(FINGERPRINT_COMMANDPACKET, sizeof(cmd_data), cmd_data);
   this->finger_->writeStructuredPacket(cmd_packet);
   
@@ -899,10 +902,29 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   if (result != FINGERPRINT_OK) {
     ESP_LOGW(TAG, "Failed to store template at ID %d: error %d", id, result);
     
-    // Try to get more info - attempt to read back the buffer
-    ESP_LOGD(TAG, "Trying getModel() to check if buffer has data...");
+    // Try to read back what's in the buffer to debug
+    ESP_LOGD(TAG, "Trying getModel() to check buffer contents...");
     uint8_t check = this->finger_->getModel();
     ESP_LOGD(TAG, "getModel() returned: %d", check);
+    
+    if (check == FINGERPRINT_OK) {
+      // Read the first packet to see what's actually in the buffer
+      delay(100);
+      uint8_t buf[20];
+      int got = 0;
+      uint32_t t = millis();
+      while (got < 20 && millis() - t < 500) {
+        if (mySerial.available()) {
+          buf[got++] = mySerial.read();
+        }
+      }
+      if (got >= 12) {
+        ESP_LOGI(TAG, "Buffer readback first 12 bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                 buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11]);
+      }
+      // Flush rest
+      while (mySerial.available()) mySerial.read();
+    }
     
     this->mode_ = previous_mode;
     return false;
