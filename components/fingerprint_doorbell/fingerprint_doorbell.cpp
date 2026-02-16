@@ -616,7 +616,8 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
     mySerial.read();
   }
   
-  // Load template from flash into character buffer 1
+  // Load template from flash into BOTH character buffers (buffer 1 and 2)
+  // According to R503 spec, loadModel loads the full template into both buffers
   uint8_t result = this->finger_->loadModel(id);
   if (result != FINGERPRINT_OK) {
     ESP_LOGW(TAG, "Failed to load template %d: error %d", id, result);
@@ -624,86 +625,104 @@ bool FingerprintDoorbell::get_template(uint16_t id, std::vector<uint8_t> &templa
     return false;
   }
   
-  // Flush again after loadModel response
-  delay(50);
-  while (mySerial.available()) {
-    mySerial.read();
-  }
-  
-  // Start template transfer from sensor
-  result = this->finger_->getModel();
-  if (result != FINGERPRINT_OK) {
-    ESP_LOGW(TAG, "Failed to start template transfer: error %d", result);
-    this->mode_ = previous_mode;
-    return false;
-  }
-  
-  // Read raw bytes from serial - template is 512 bytes
-  // Sensor sends 128-byte data packets (based on sensor's packet_len setting)
-  // Each packet: 9 bytes header + 128 bytes data + 2 bytes checksum = 139 bytes
-  // 4 packets needed for 512 bytes = 556 total bytes
-  // Packet structure: 2-byte start (EF01), 4-byte addr, 1-byte type, 2-byte length, N-byte data, 2-byte checksum
+  // Constants for reading template data
   const int PACKET_DATA_SIZE = 128;
   const int PACKET_OVERHEAD = 11;  // 9 header + 2 checksum
   const int PACKET_SIZE = PACKET_DATA_SIZE + PACKET_OVERHEAD;  // 139 bytes
-  const int NUM_PACKETS = 4;
-  const int TOTAL_BYTES = PACKET_SIZE * NUM_PACKETS;  // 556 bytes
+  const int NUM_PACKETS_PER_BUFFER = 4;  // 4 packets x 128 bytes = 512 bytes per buffer
+  const int TOTAL_BYTES_PER_BUFFER = PACKET_SIZE * NUM_PACKETS_PER_BUFFER;  // 556 bytes
   
-  uint8_t raw_data[600];
-  memset(raw_data, 0xff, sizeof(raw_data));
-  
-  uint32_t start_time = millis();
-  const uint32_t TIMEOUT_MS = 5000;
-  int idx = 0;
-  
-  while (idx < TOTAL_BYTES && (millis() - start_time < TIMEOUT_MS)) {
-    if (mySerial.available()) {
-      raw_data[idx++] = mySerial.read();
+  // Helper lambda to read data from a buffer
+  auto read_buffer_data = [&](uint8_t buffer_id, std::vector<uint8_t> &buffer_data) -> bool {
+    // Flush serial before starting
+    delay(50);
+    while (mySerial.available()) mySerial.read();
+    
+    // Request template data from specified buffer using UPCHAR command (0x0B)
+    // getModel() uses buffer 1, we need to send raw command for buffer 2
+    if (buffer_id == 1) {
+      result = this->finger_->getModel();
+    } else {
+      // Send UPCHAR command for buffer 2 manually
+      uint8_t cmd_data[] = {0x0B, buffer_id};  // FINGERPRINT_UPLOAD = 0x0B
+      Adafruit_Fingerprint_Packet cmd_packet(FINGERPRINT_COMMANDPACKET, sizeof(cmd_data), cmd_data);
+      this->finger_->writeStructuredPacket(cmd_packet);
+      
+      Adafruit_Fingerprint_Packet ack_packet(FINGERPRINT_ACKPACKET, 0, nullptr);
+      if (this->finger_->getStructuredPacket(&ack_packet, 1000) != FINGERPRINT_OK) {
+        ESP_LOGW(TAG, "No response for UPCHAR buffer %d", buffer_id);
+        return false;
+      }
+      result = ack_packet.data[0];
     }
-  }
+    
+    if (result != FINGERPRINT_OK) {
+      ESP_LOGW(TAG, "Failed to start template transfer from buffer %d: error %d", buffer_id, result);
+      return false;
+    }
+    
+    // Read raw bytes from serial
+    uint8_t raw_data[600];
+    memset(raw_data, 0xff, sizeof(raw_data));
+    
+    uint32_t start_time = millis();
+    const uint32_t TIMEOUT_MS = 5000;
+    int idx = 0;
+    
+    while (idx < TOTAL_BYTES_PER_BUFFER && (millis() - start_time < TIMEOUT_MS)) {
+      if (mySerial.available()) {
+        raw_data[idx++] = mySerial.read();
+      }
+    }
+    
+    ESP_LOGD(TAG, "Buffer %d: read %d raw bytes (expected %d)", buffer_id, idx, TOTAL_BYTES_PER_BUFFER);
+    
+    if (idx < TOTAL_BYTES_PER_BUFFER) {
+      ESP_LOGW(TAG, "Timeout reading buffer %d data, only got %d bytes", buffer_id, idx);
+      return false;
+    }
+    
+    // Extract template data from packets
+    for (int pkt = 0; pkt < NUM_PACKETS_PER_BUFFER; pkt++) {
+      int pkt_start = pkt * PACKET_SIZE;
+      int data_start = pkt_start + 9;  // Skip 9-byte header
+      
+      // Verify packet header
+      if (raw_data[pkt_start] != 0xEF || raw_data[pkt_start + 1] != 0x01) {
+        ESP_LOGW(TAG, "Invalid packet %d header in buffer %d: %02X %02X", 
+                 pkt + 1, buffer_id, raw_data[pkt_start], raw_data[pkt_start + 1]);
+      }
+      
+      // Extract 128 bytes of data from this packet
+      for (int i = 0; i < PACKET_DATA_SIZE; i++) {
+        buffer_data.push_back(raw_data[data_start + i]);
+      }
+    }
+    
+    return true;
+  };
   
-  ESP_LOGD(TAG, "Read %d raw bytes from sensor (expected %d)", idx, TOTAL_BYTES);
+  // Read from buffer 1 (512 bytes)
+  template_data.clear();
+  template_data.reserve(1024);  // Reserve space for both buffers
   
-  // Log first packet header for debugging
-  if (idx >= 12) {
-    ESP_LOGI(TAG, "Download PKT1 header: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-             raw_data[0], raw_data[1], raw_data[2], raw_data[3], raw_data[4], raw_data[5],
-             raw_data[6], raw_data[7], raw_data[8], raw_data[9], raw_data[10], raw_data[11]);
-  }
-  
-  if (idx < TOTAL_BYTES) {
-    ESP_LOGW(TAG, "Timeout reading template data, only got %d bytes (expected %d)", idx, TOTAL_BYTES);
+  ESP_LOGI(TAG, "Reading template %d from buffer 1...", id);
+  if (!read_buffer_data(1, template_data)) {
     this->mode_ = previous_mode;
     return false;
   }
+  ESP_LOGI(TAG, "Buffer 1: got %d bytes", template_data.size());
   
-  // Extract template data from 4 packets of 128 bytes each
-  template_data.clear();
-  template_data.reserve(512);
-  
-  for (int pkt = 0; pkt < NUM_PACKETS; pkt++) {
-    int pkt_start = pkt * PACKET_SIZE;
-    int data_start = pkt_start + 9;  // Skip 9-byte header
-    
-    // Verify packet header
-    if (raw_data[pkt_start] != 0xEF || raw_data[pkt_start + 1] != 0x01) {
-      ESP_LOGW(TAG, "Invalid packet %d header at byte %d: %02X %02X", 
-               pkt + 1, pkt_start, raw_data[pkt_start], raw_data[pkt_start + 1]);
-    }
-    
-    // Extract 128 bytes of data from this packet
-    for (int i = 0; i < PACKET_DATA_SIZE; i++) {
-      template_data.push_back(raw_data[data_start + i]);
-    }
+  // Read from buffer 2 (another 512 bytes)
+  ESP_LOGI(TAG, "Reading template %d from buffer 2...", id);
+  if (!read_buffer_data(2, template_data)) {
+    // If buffer 2 fails, we might have a 512-byte template (older format)
+    ESP_LOGW(TAG, "Could not read buffer 2, using 512-byte template");
+  } else {
+    ESP_LOGI(TAG, "Buffer 2: total now %d bytes", template_data.size());
   }
   
-  // Debug: verify no packet headers in template data
-  ESP_LOGI(TAG, "Template bytes 126-137: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-           template_data[126], template_data[127], template_data[128], template_data[129],
-           template_data[130], template_data[131], template_data[132], template_data[133],
-           template_data[134], template_data[135], template_data[136], template_data[137]);
-  
-  ESP_LOGI(TAG, "Downloaded template %d: %d bytes", id, template_data.size());
+  ESP_LOGI(TAG, "Downloaded template %d: %d bytes total", id, template_data.size());
   this->mode_ = previous_mode;
   return true;
 }
@@ -714,10 +733,13 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     return false;
   }
   
-  if (template_data.size() != 512) {
-    ESP_LOGW(TAG, "Invalid template size: %d bytes (expected 512)", template_data.size());
+  // Accept both 512-byte (legacy single buffer) and 1024-byte (dual buffer) templates
+  if (template_data.size() != 512 && template_data.size() != 1024) {
+    ESP_LOGW(TAG, "Invalid template size: %d bytes (expected 512 or 1024)", (int)template_data.size());
     return false;
   }
+  
+  bool dual_buffer = (template_data.size() == 1024);
   
   // Temporarily pause scanning to avoid conflicts
   Mode previous_mode = this->mode_;
@@ -735,7 +757,8 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
   if (packet_len == 0 || packet_len > 256) {
     packet_len = 128;  // Safe default
   }
-  ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes, using %d-byte packets)", id, template_data.size(), packet_len);
+  ESP_LOGI(TAG, "Uploading template to ID %d (%d bytes, %s mode, %d-byte packets)", 
+           id, (int)template_data.size(), dual_buffer ? "dual-buffer" : "single-buffer", packet_len);
   ESP_LOGI(TAG, "Sensor params: capacity=%d, security=%d, packet_len=%d",
            this->finger_->capacity, this->finger_->security_level, this->finger_->packet_len);
   
@@ -746,15 +769,11 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
            template_data[8], template_data[9], template_data[10], template_data[11],
            template_data[12], template_data[13], template_data[14], template_data[15]);
   
-  // According to R503 manual and Adafruit library issue #36:
-  // A "template" is created by combining feature files from CharBuffer1 and CharBuffer2.
-  // When uploading a template that was previously exported via getModel(), we need to:
-  // 1. Upload the SAME data to BOTH buffers (since getModel exports a combined template)
-  // 2. Call createModel() to merge them (even though they're identical)
-  // 3. Call storeModel() to save to flash
-  //
-  // This is because the sensor expects to create a template from two separate feature files,
-  // even when importing a pre-existing template.
+  // R503 template structure:
+  // - Each character buffer holds 512 bytes (a "feature file")
+  // - A complete template is created by merging buffer 1 and buffer 2 via createModel()
+  // - For 1024-byte templates: first 512 bytes -> buffer 1, second 512 bytes -> buffer 2
+  // - For 512-byte templates (legacy): upload same data to both buffers
 
   // Helper lambda to upload data to a specific buffer
   // Follows FPM library pattern: byte-by-byte header writes, no ACK between data packets
@@ -849,30 +868,66 @@ bool FingerprintDoorbell::upload_template(uint16_t id, const std::string &name, 
     return true;
   };
 
-  // According to FPM library: for importing an already-created template,
-  // we just upload the full 512 bytes to buffer 1 and store directly.
-  // No need for createModel() - that's only for creating NEW templates from scans.
+  // Split template data for dual-buffer upload
+  std::vector<uint8_t> buffer1_data, buffer2_data;
   
-  // Step 1: Upload full 512-byte template to CharBuffer 1
-  ESP_LOGI(TAG, "Step 1: Uploading full template (512 bytes) to CharBuffer 1");
-  if (!upload_to_buffer(0x01, template_data)) {
+  if (dual_buffer) {
+    // 1024-byte template: split into two 512-byte halves
+    buffer1_data.assign(template_data.begin(), template_data.begin() + 512);
+    buffer2_data.assign(template_data.begin() + 512, template_data.end());
+    ESP_LOGI(TAG, "Split 1024-byte template: buffer1=%d bytes, buffer2=%d bytes", 
+             (int)buffer1_data.size(), (int)buffer2_data.size());
+  } else {
+    // 512-byte template (legacy): upload same data to both buffers
+    buffer1_data = template_data;
+    buffer2_data = template_data;
+    ESP_LOGI(TAG, "Legacy 512-byte template: duplicating to both buffers");
+  }
+  
+  // Step 1: Upload to CharBuffer 1
+  ESP_LOGI(TAG, "Step 1: Uploading 512 bytes to CharBuffer 1");
+  if (!upload_to_buffer(0x01, buffer1_data)) {
     ESP_LOGW(TAG, "Failed to upload template to CharBuffer 1");
     this->mode_ = previous_mode;
     return false;
   }
   
-  delay(200);
+  delay(100);
   while (mySerial.available()) mySerial.read();
   
-  // Step 2: Delete any existing template at this ID
-  ESP_LOGD(TAG, "Step 2: Deleting any existing template at ID %d", id);
+  // Step 2: Upload to CharBuffer 2
+  ESP_LOGI(TAG, "Step 2: Uploading 512 bytes to CharBuffer 2");
+  if (!upload_to_buffer(0x02, buffer2_data)) {
+    ESP_LOGW(TAG, "Failed to upload template to CharBuffer 2");
+    this->mode_ = previous_mode;
+    return false;
+  }
+  
+  delay(100);
+  while (mySerial.available()) mySerial.read();
+  
+  // Step 3: Create model by merging buffer 1 and buffer 2
+  // This is required because the sensor stores templates as merged feature files
+  ESP_LOGI(TAG, "Step 3: Creating model (merging buffers)");
+  uint8_t create_result = this->finger_->createModel();
+  ESP_LOGI(TAG, "createModel() returned: 0x%02X", create_result);
+  
+  if (create_result != FINGERPRINT_OK) {
+    ESP_LOGW(TAG, "createModel failed with error 0x%02X - will try storeModel anyway", create_result);
+  }
+  
+  delay(100);
+  while (mySerial.available()) mySerial.read();
+  
+  // Step 4: Delete any existing template at this ID
+  ESP_LOGD(TAG, "Step 4: Deleting any existing template at ID %d", id);
   uint8_t del_result = this->finger_->deleteModel(id);
   ESP_LOGD(TAG, "deleteModel(%d) returned: %d", id, del_result);
   delay(100);
   while (mySerial.available()) mySerial.read();
   
-  // Step 3: Store the template to flash
-  ESP_LOGI(TAG, "Step 3: Storing template to ID %d", id);
+  // Step 5: Store the template to flash
+  ESP_LOGI(TAG, "Step 5: Storing template to ID %d", id);
   uint8_t result = this->finger_->storeModel(id);  // Uses buffer 1 by default
   ESP_LOGI(TAG, "storeModel(%d) returned: 0x%02X", id, result);
   
